@@ -1,14 +1,17 @@
-# Screen dimensions
-WIDTH = 800
-HEIGHT = 600
+W = 800
+H = 600
 FPS = 60
-
-# Tile settings
-TILE_SIZE = 32
-GRID_WIDTH = WIDTH // TILE_SIZE
-GRID_HEIGHT = HEIGHT // TILE_SIZE
-
-# Colors
-COLOR_WALL = (40, 40, 40)
-COLOR_FLOOR = (100, 100, 100)
-COLOR_BG = (20, 20, 20)
+TS = 32
+GW = W // TS
+GH = H // TS
+CW = (40, 40, 40)
+CF = (100, 100, 100)
+CBG = (20, 20, 20)
+POP_DUR = 900
+ERR_DUR = 3.0
+ANIM_DUR = 220
+SCROLL_SPEED = 40
+DC_TIMER = 400
+DICE_TYPES = ['attack', 'evade', 'special']
+DEF_TRIGGERS = ['on_play', 'on_clash', 'on_clash_start', 'on_win', 'on_lose', 'on_die_roll', 'on_die_max', 'on_unopposed_attack', 'on_evade_success', 'on_evade_fail']
+DEF_ACTIONS = ['modify_max_roll', 'modify_min_roll', 'inflict_status', 'grant_next_turn_status', 'double_damage', 'heal', 'damage_by_potency', 'restore_points', 'restore_points_to_max', 'draw_skills', 'draw_if_empty_hand', 'refresh_if_deck_empty', 'refresh', 'gain_shield']

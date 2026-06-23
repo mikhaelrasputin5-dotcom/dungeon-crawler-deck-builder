@@ -7,25 +7,25 @@ if TYPE_CHECKING:
     from context import Context
 
 class Die(Interactible):
-    
-    def __init__(self, roll_range: list[int],
-                 type: str,
-                 effects: list[Effect] = None):
-        self.min_roll = roll_range[0]
-        self.max_roll = roll_range[1]
-        self.type = type
-        self.effects = effects if effects is not None else []
+    def __init__(self, rng, t, fx=None):
+        self.min_roll = rng[0]
+        self.max_roll = rng[1]
+        self.type = t
+        self.effects = fx if fx else []
 
-    def roll(self, context: 'Context' = None) -> int:
-        result = self.min_roll + randint(0, self.max_roll - self.min_roll)
-        if context and result == self.max_roll:
-            self.process_effects('on_die_max', context)
-        return result
-    
+    def roll(self, ctx=None):
+        r = self.min_roll + randint(0, self.max_roll - self.min_roll)
+        if ctx and r == self.max_roll:
+            self.fx_proc('on_die_max', ctx)
+        return r
+
     def copy(self):
         return Die([self.min_roll, self.max_roll], self.type, list(self.effects))
+
+    def fx_proc(self, t, ctx):
+        for e in self.effects:
+            if e.trigger == t:
+                e.execute(ctx)
     
-    def process_effects(self, trigger: str, context: 'Context'):
-        for effect in self.effects:
-            if effect.trigger == trigger:
-                effect.execute(context)
+    def process_effects(self, t, ctx):
+        self.fx_proc(t, ctx)

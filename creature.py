@@ -11,214 +11,192 @@ if TYPE_CHECKING:
     from context import Context
 
 class Creature(Interactible):
-    
-    def __init__(self,
-                 name: str, description: str,
-                 HP: int, SR: int, resist: dict[str, int],
-                 slots: list[Skillslot],
-                 deck: list[Skill],
-                 max_points: int = -1,
-                 pos: tuple[int, int] = (0, 0)):
-        self.name = name
-        self.description = description
-        self.HP = HP
-        self.max_HP = HP
-        self.SR = SR  # Stagger resistance
-        self.max_SR = SR
-        self.resist = resist
-
+    def __init__(self, nm, desc, hp, sr, res, slots, deck, max_pts=-1, pos=(0, 0)):
+        self.name = nm
+        self.description = desc
+        self.HP = hp
+        self.max_HP = hp
+        self.SR = sr
+        self.max_SR = sr
+        self.resist = res
         self.slots = slots
         self.deck = deck
-        self.hand: list[Skill] = []
-        self.discarded: list[Skill] = []
-        self.points = 0
-        self.max_points = max_points
-        self.staggered_turns = 0
-
+        self.hand = []
+        self.disc = []
+        self.pts = 0
+        self.max_pts = max_pts
+        self.stag_turns = 0
         self.pos = pos
-
-        self.effects: list[Effect] = []
-        self.statuses: dict[str, Status] = {}
-        self.pending_statuses: list[dict] = []
+        self.fx = []
+        self.stat = {}
+        self.pend_stat = []
         self.shield = 0
+        self.layout = None
 
-        self.layout: 'Game' = None  # Assigned by Game.add_enemy()
-
-    def apply(self, status: Status, potency: int = 0, count: int = 0) -> None:
-        key = getattr(status, 'id', status.name)
-        if key not in self.statuses:
-            self.statuses[key] = status.copy()
-            self.statuses[key].potency = potency or status.potency
-            self.statuses[key].count = count or status.count
+    def apply_stat(self, s, pot=0, cnt=0):
+        k = getattr(s, 'id', s.name)
+        if k not in self.stat:
+            self.stat[k] = s.copy()
+            self.stat[k].potency = pot or s.potency
+            self.stat[k].count = cnt or s.count
         else:
-            self.statuses[key].potency += potency
-            self.statuses[key].count += count
+            self.stat[k].potency += pot
+            self.stat[k].count += cnt
     
-    def add_status(self, status: Status | str, potency: int = 0, count: int = 0) -> None:
-        if isinstance(status, str):
-            if self.layout and status in self.layout.statuses:
-                status = self.layout.statuses[status]
+    def add_stat(self, s, pot=0, cnt=0):
+        if isinstance(s, str):
+            if self.layout and s in self.layout.statuses:
+                s = self.layout.statuses[s]
             else:
-                status = Status(status, status, '')
-        self.apply(status, potency, count)
+                s = Status(s, s, '')
+        self.apply_stat(s, pot, cnt)
         if self.layout:
-            label = f'+{status.name}'
-            if count:
-                label += f' x{count}'
-            self.layout.add_status_number(self, label)
+            lbl = f'+{s.name}'
+            if cnt:
+                lbl += f' x{cnt}'
+            self.layout.add_stat_num(self, lbl)
     
-    def get_status(self, name: str) -> Status | None:
-        status = self.statuses.get(name)
-        if status:
-            return status
-        for status in self.statuses.values():
-            if status.name == name:
-                return status
+    def get_stat(self, nm):
+        s = self.stat.get(nm)
+        if s:
+            return s
+        for s in self.stat.values():
+            if s.name == nm:
+                return s
         return None
     
-    def get_status_count(self, name: str) -> int:
-        status = self.get_status(name)
-        return status.count if status else 0
+    def get_stat_cnt(self, nm):
+        s = self.get_stat(nm)
+        return s.count if s else 0
     
-    def schedule_status(self, status: Status | str, potency: int = 0, count: int = 0, delay: int = 1) -> None:
-        if isinstance(status, Status):
-            status = status.id
-        self.pending_statuses.append({'status': status, 'potency': potency, 'count': count, 'delay': delay})
+    def sched_stat(self, s, pot=0, cnt=0, del_=1):
+        if isinstance(s, Status):
+            s = s.id
+        self.pend_stat.append({'status': s, 'potency': pot, 'count': cnt, 'delay': del_})
     
-    def apply_pending_statuses(self) -> None:
-        remaining = []
-        for pending in self.pending_statuses:
-            pending['delay'] -= 1
-            if pending['delay'] <= 0:
-                status = pending['status']
-                if isinstance(status, str) and self.layout:
-                    status = self.layout.statuses.get(status)
-                if isinstance(status, str):
-                    status = Status(status, status, '')
-                self.add_status(status, pending['potency'], pending['count'])
+    def apply_pend_stat(self):
+        rem = []
+        for p in self.pend_stat:
+            p['delay'] -= 1
+            if p['delay'] <= 0:
+                s = p['status']
+                if isinstance(s, str) and self.layout:
+                    s = self.layout.statuses.get(s)
+                if isinstance(s, str):
+                    s = Status(s, s, '')
+                self.add_stat(s, p['potency'], p['count'])
             else:
-                remaining.append(pending)
-        self.pending_statuses = remaining
+                rem.append(p)
+        self.pend_stat = rem
 
-    def decay_status(self) -> None:
-        for name in self.statuses.copy():
-            if self.statuses[name].decay():
-                self.statuses.pop(name)
+    def decay_stat(self):
+        for nm in list(self.stat.keys()):
+            if self.stat[nm].decay():
+                del self.stat[nm]
 
-    def take_damage(self, damage: int, dtype: str, context: 'Context' = None):
-        prev_HP = int(self.HP)
-        adjusted_damage = int(damage * (1 - self.resist.get(dtype + '_HP', 0)))
-
-        if self.shield > 0 and adjusted_damage > 0:
-            blocked = min(self.shield, adjusted_damage)
-            self.shield -= blocked
-            adjusted_damage -= blocked
-            if adjusted_damage <= 0:
-                if context:
-                    context.damage = 0
-                    context.hp_lost = 0
-                    context.hp_percent_lost = 0
+    def take_dmg(self, dmg, dt, ctx=None):
+        prev_hp = int(self.HP)
+        adj = int(dmg * (1 - self.resist.get(dt + '_HP', 0)))
+        if self.shield > 0 and adj > 0:
+            blk = min(self.shield, adj)
+            self.shield -= blk
+            adj -= blk
+            if adj <= 0:
+                if ctx:
+                    ctx.dmg = 0
+                    ctx.hp_l = 0
+                    ctx.hp_pl = 0
                 return
-
-        self.HP -= adjusted_damage
-
-        if adjusted_damage > 0 and self.layout:
-            self.layout.add_damage_number(self, adjusted_damage)
-            self.layout.add_attack_animation(self, dtype)
-
-        if context:
-            context.damage = adjusted_damage
-            context.hp_lost = prev_HP - self.HP
-            context.hp_percent_lost = (prev_HP - self.HP) * 100 / prev_HP if prev_HP > 0 else 0
-            self.process_effects('on_hit', context)
-        
+        self.HP -= adj
+        if adj > 0 and self.layout:
+            self.layout.add_dmg_num(self, adj)
+            self.layout.add_atk_anim(self, dt)
+        if ctx:
+            ctx.dmg = adj
+            ctx.hp_l = prev_hp - self.HP
+            ctx.hp_pl = (prev_hp - self.HP) * 100 / prev_hp if prev_hp > 0 else 0
+            self.fx_proc('on_hit', ctx)
         if self.SR > 0:
-            sr_damage = int(adjusted_damage * (1 - self.resist.get(dtype + '_SR', 0)))
-            self.SR = max(0, self.SR - sr_damage)
-            
-            if self.is_staggered() and context:
-                self.process_effects('on_stagger', context)
+            sr_d = int(adj * (1 - self.resist.get(dt + '_SR', 0)))
+            self.SR = max(0, self.SR - sr_d)
+            if self.is_stag() and ctx:
+                self.fx_proc('on_stagger', ctx)
                 if self.layout:
-                    self.layout.handle_stagger(self, context)
+                    self.layout.handle_stag(self, ctx)
+        if self.HP <= 0 and self.layout and ctx:
+            self.layout.handle_death(self, ctx)
 
-        if self.HP <= 0 and self.layout and context:
-            self.layout.handle_death(self, context)
-
-    def heal(self, amount: int) -> None:
+    def heal(self, amt):
         if self.HP > 0:
-            self.HP = min(self.max_HP, self.HP + amount)
+            self.HP = min(self.max_HP, self.HP + amt)
 
-    def is_alive(self) -> bool:
+    def is_alive(self):
         return self.HP > 0
 
-    def is_staggered(self) -> bool:
+    def is_stag(self):
         return self.SR <= 0
 
-    def take_manual_turn(self) -> None:
+    def take_turn(self):
         self.autopilot()
     
-    def autopilot(self) -> None:
+    def autopilot(self):
         if not self.hand:
             return
-
-        affordable = [s for s in self.hand if self.points >= s.cost] if self.max_points > 0 else list(self.hand)
-        if not affordable:
+        aff = [s for s in self.hand if self.pts >= s.cost] if self.max_pts > 0 else list(self.hand)
+        if not aff:
             return
-
-        skill = random.choice(affordable)
-        if self.max_points > 0:
-            self.points -= skill.cost
-        
+        sk = random.choice(aff)
+        if self.max_pts > 0:
+            self.pts -= sk.cost
         if self.layout:
-            target = None
+            tgt = None
             if self == self.layout.playerchar:
-                target = next((e for e in self.layout.enemy_list if e.is_alive()), None)
+                tgt = next((e for e in self.layout.enemy_list if e.is_alive()), None)
             else:
-                target = self.layout.playerchar if self.layout.playerchar.is_alive() else None
-            
-            slot = Skillslot(speed_range=(0, 0))
-            slot.owner = self
-            slot.set_target_creature(target)
-            slot.assigned_skill = skill
-            slot.roll_speed()
-            self.layout.add_slot(slot)
+                tgt = self.layout.playerchar if self.layout.playerchar.is_alive() else None
+            sl = Skillslot(speed_range=(0, 0))
+            sl.owner = self
+            sl.set_target_creature(tgt)
+            sl.sk = sk
+            sl.roll_spd()
+            self.layout.add_slot(sl)
 
-    def assignSlot(self, slot: Skillslot) -> bool:
-        if slot in self.slots:
+    def assignSlot(self, sl):
+        if sl in self.slots:
             return False
-        self.slots.append(slot)
+        self.slots.append(sl)
         return True
     
-    def draw_skills(self, n: int = 1) -> None:
-        if not self.deck and self.discarded:
-            self.refresh_deck()
+    def draw_sk(self, n=1):
+        if not self.deck and self.disc:
+            self.refresh()
         for _ in range(n):
             if self.deck:
                 self.hand.append(self.deck.pop(0))
 
-    def discard(self, skill: Skill, context: 'Context') -> None:
-        if skill in self.hand:
-            self.hand.remove(skill)
-            self.discarded.append(skill)
-            self.process_effects('on_discard', context)
+    def discard(self, sk, ctx):
+        if sk in self.hand:
+            self.hand.remove(sk)
+            self.disc.append(sk)
+            self.fx_proc('on_discard', ctx)
     
-    def refresh_deck(self) -> None:
-        if self.discarded:
-            self.deck.extend(self.discarded)
-            self.discarded.clear()
+    def refresh(self):
+        if self.disc:
+            self.deck.extend(self.disc)
+            self.disc.clear()
             random.shuffle(self.deck)
 
-    def get_effect_list(self):
-        return self.effects.copy()
+    def get_fx(self):
+        return self.fx.copy()
     
-    def process_effects(self, trigger: str, context: 'Context') -> None:
-        for effect in self.effects:
-            if effect.trigger == trigger:
-                effect.execute(context)
-        self.process_status_effects(trigger, context)
+    def fx_proc(self, t, ctx):
+        for e in self.fx:
+            if e.trigger == t:
+                e.execute(ctx)
+        self.stat_fx_proc(t, ctx)
     
-    def process_status_effects(self, trigger: str, context: 'Context') -> None:
-        for status in list(self.statuses.values()):
-            for effect in status.effects:
-                if effect.trigger == trigger:
-                    effect.execute(context)
+    def stat_fx_proc(self, t, ctx):
+        for s in list(self.stat.values()):
+            for e in s.effects:
+                if e.trigger == t:
+                    e.execute(ctx)

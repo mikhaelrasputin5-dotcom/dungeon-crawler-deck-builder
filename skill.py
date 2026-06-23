@@ -1,4 +1,3 @@
-from random import randint
 from typing import TYPE_CHECKING
 from die import Die
 from effect import Effect
@@ -8,117 +7,87 @@ if TYPE_CHECKING:
     from context import Context
 
 class Skill:
-    def __init__(self, name: str, description: str,
-                 cost: int,
-                 targeting_type: str,
-                 dice: list[Die]):
-        self.name = name
-        self.description = description
+    def __init__(self, nm, desc, cost, tgt_t, dice):
+        self.name = nm
+        self.description = desc
         self.cost = cost
-        self.targeting_type = targeting_type  # 'self', 'enemy', 'cone', etc.
+        self.targeting_type = tgt_t
         self.dice = dice
-        self.effects: list[Effect] = []
+        self.effects = []
 
-    def clash(self, other_skill: 'Skill', context: 'Context') -> int:
-        self.process_effects('on_play', context)
-        self.process_effects('on_clash_start', context)
-        my_dice = [d.copy() for d in self.dice]
-        their_dice = [d.copy() for d in other_skill.dice]
-
-        fin = 0
+    def clash(self, opp, ctx):
+        self.fx_proc('on_play', ctx)
+        self.fx_proc('on_clash_start', ctx)
+        my_d = [d.copy() for d in self.dice]
+        their_d = [d.copy() for d in opp.dice]
+        orig_atk = ctx.atk
+        orig_def = ctx.def_
+        dmg_cnt = 0
         
-        original_attacker = context.attacker
-        original_defender = context.defender
-
-        for index in range(min(len(my_dice), len(their_dice))):
-            self.process_effects('on_clash', context)
+        for i in range(min(len(my_d), len(their_d))):
+            self.fx_proc('on_clash', ctx)
+            md = my_d[i]
+            td = their_d[i]
             
-            my_die = my_dice[index]
-            their_die = their_dice[index]
+            ctx.die = md
+            ctx.idx = i
+            ctx.atk = orig_atk
+            ctx.def_ = orig_def
+            ctx.atk.fx_proc('on_die_roll', ctx)
+            md.fx_proc('on_die_roll', ctx)
             
-            context.die = my_die
-            context.index = index
-            context.attacker = original_attacker
-            context.defender = original_defender
-            context.attacker.process_effects('on_die_roll', context)
-            my_die.process_effects('on_die_roll', context)
+            ctx.die = td
+            ctx.atk = orig_def
+            ctx.def_ = orig_atk
+            ctx.atk.fx_proc('on_die_roll', ctx)
+            td.fx_proc('on_die_roll', ctx)
             
-            context.die = their_die
-            context.attacker = original_defender
-            context.defender = original_attacker
-            context.attacker.process_effects('on_die_roll', context)
-            their_die.process_effects('on_die_roll', context)
+            ctx.atk = orig_atk
+            ctx.def_ = orig_def
+            my_r = md.roll(ctx)
+            their_r = td.roll(ctx)
+            ctx.ch.append((my_r, their_r))
             
-            context.attacker = original_attacker
-            context.defender = original_defender
-            my_roll = my_die.roll(context)
-            their_roll = their_die.roll(context)
-            
-            context.clash_history.append((my_roll, their_roll))
-            
-            if my_roll > their_roll:
-                context.damage = my_roll - their_roll
-                context.die = my_die
-                my_die.process_effects('on_win', context)
-                if my_die.type == 'evade':
-                    my_die.process_effects('on_evade_success', context)
-                    context.damage = 0
+            if my_r > their_r:
+                ctx.dmg = my_r - their_r
+                ctx.die = md
+                md.fx_proc('on_win', ctx)
+                ctx.die = td
+                td.fx_proc('on_lose', ctx)
+                tgt = ctx.get_opponent(ctx.atk)
+                tgt.take_damage(ctx.dmg, md.type, ctx)
+            elif their_r > my_r:
+                ctx.dmg = their_r - my_r
+                ctx.die = td
+                td.fx_proc('on_win', ctx)
+                ctx.die = md
+                md.fx_proc('on_lose', ctx)
+                tgt = ctx.get_opponent(ctx.def_)
+                tgt.take_damage(ctx.dmg, td.type, ctx)
+            ctx.dmg = 0
+            dmg_cnt += 1
+        return dmg_cnt
 
-                context.die = their_die
-                their_die.process_effects('on_lose', context)
-                if their_die.type == 'evade':
-                    their_die.process_effects('on_evade_fail', context)
-
-                target = context.get_opponent(context.attacker)
-                target.take_damage(context.damage, my_die.type, context)
-            elif their_roll > my_roll:
-                context.damage = their_roll - my_roll
-                context.die = their_die
-                their_die.process_effects('on_win', context)
-                if their_die.type == 'evade':
-                    their_die.process_effects('on_evade_success', context)
-                    context.damage = 0
-
-                context.die = my_die
-                my_die.process_effects('on_lose', context)
-                if my_die.type == 'evade':
-                    my_die.process_effects('on_evade_fail', context)
-
-                target = context.get_opponent(context.defender)
-                target.take_damage(context.damage, their_die.type, context)
-            context.damage = 0
-            fin += 1
-        return fin
-        
-    def attack(self, context: 'Context', begin: int = 0):
-        self.process_effects('on_play', context)
-        self.process_effects('on_unopposed_attack', context)
-
-        for index, die in enumerate(self.dice):
-            if index < begin or die.type == 'evade':
+    def attack(self, ctx, start=0):
+        self.fx_proc('on_play', ctx)
+        self.fx_proc('on_unopposed_attack', ctx)
+        for i, d in enumerate(self.dice):
+            if i < start:
                 continue
+            ctx.die = d
+            ctx.idx = i
+            ctx.atk.fx_proc('on_die_roll', ctx)
+            d.fx_proc('on_die_roll', ctx)
+            ctx.dmg = d.roll(ctx)
+            tgts = ctx.tgts or ([ctx.def_] if ctx.def_ else [])
+            for t in tgts:
+                if t and t.is_alive():
+                    tc = ctx.with_target(t)
+                    d.fx_proc('on_unopposed_hit', tc)
+                    t.take_damage(ctx.dmg, d.type, tc)
+            ctx.dmg = 0
 
-            context.die = die
-            context.index = index
-            context.attacker.process_effects('on_die_roll', context)
-            die.process_effects('on_die_roll', context)
-            context.damage = die.roll(context)
-
-            targets = context.targets
-            if not targets:
-                primary_target = context.defender or context.get_opponent(context.attacker)
-                targets = [primary_target] if primary_target else []
-
-            for target in targets:
-                if target is None or not target.is_alive():
-                    continue
-                target_context = context.with_target(target)
-                die.process_effects('on_unopposed_hit', target_context)
-                target.take_damage(context.damage, die.type, target_context)
-
-            context.damage = 0
-    
-    def process_effects(self, trigger: str, context: 'Context') -> None:
-        for effect in self.effects:
-            if effect.trigger == trigger:
-                effect.execute(context)
+    def fx_proc(self, t, ctx):
+        for e in self.effects:
+            if e.trigger == t:
+                e.execute(ctx)

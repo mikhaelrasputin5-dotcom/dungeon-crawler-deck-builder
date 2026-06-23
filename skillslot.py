@@ -5,35 +5,54 @@ if TYPE_CHECKING:
     from creature import Creature
 
 class Skillslot(Interactible):
-    def __init__(self, speed_range: tuple[int, int] = (0, 0)):
-        self.assigned_skill: Skill = None
-        self.target: 'Creature' = None  # Primary target creature for this slot
-        self.target_positions: list[tuple[int, int]] = []  # Area target tiles for multi-target skills
-        self.speed_range = speed_range
-        self.speed = 0
-        self.owner: 'Creature' = None
+    def __init__(self, speed_range=(0, 0)):
+        self.sk = None
+        self.tgt = None
+        self.tgt_pos = []
+        self.spd_rng = speed_range
+        self.spd = 0
+        self.owner = None
     
-    def roll_speed(self) -> int:
+    def roll_spd(self):
         from random import randint
-        self.speed = randint(self.speed_range[0], self.speed_range[1])
-        return self.speed
+        self.spd = randint(self.spd_rng[0], self.spd_rng[1])
+        return self.spd
     
-    def get_speed(self) -> int:
-        return self.speed
+    def get_speed(self):
+        return self.spd
     
-    def get_skill(self) -> Skill:
-        return self.assigned_skill
+    def get_skill(self):
+        return self.sk
+    
+    def assigned_skill(self):
+        return self.sk
+    
+    @property
+    def assigned_skill(self):
+        return self.sk
+    
+    @assigned_skill.setter
+    def assigned_skill(self, val):
+        self.sk = val
+    
+    @property
+    def target(self):
+        return self.tgt
+    
+    @target.setter
+    def target(self, val):
+        self.tgt = val
 
-    def set_target_creature(self, target: Optional['Creature']) -> None:
-        self.target = target
-        self.target_positions = []
+    def set_target_creature(self, t):
+        self.tgt = t
+        self.tgt_pos = []
 
-    def get_target_creature(self) -> Optional['Creature']:
-        return self.target
+    def get_target_creature(self):
+        return self.tgt
 
-    def set_target_positions(self, positions: list[tuple[int, int]]) -> None:
-        self.target_positions = list(positions)
-        self.target = None
+    def set_target_positions(self, pos):
+        self.tgt_pos = list(pos)
+        self.tgt = None
 
-    def get_target_positions(self) -> list[tuple[int, int]]:
-        return self.target_positions
+    def get_target_positions(self):
+        return self.tgt_pos
