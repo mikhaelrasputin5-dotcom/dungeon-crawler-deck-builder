@@ -1,0 +1,14 @@
+# Screen dimensions
+WIDTH = 800
+HEIGHT = 600
+FPS = 60
+
+# Tile settings
+TILE_SIZE = 32
+GRID_WIDTH = WIDTH // TILE_SIZE
+GRID_HEIGHT = HEIGHT // TILE_SIZE
+
+# Colors
+COLOR_WALL = (40, 40, 40)
+COLOR_FLOOR = (100, 100, 100)
+COLOR_BG = (20, 20, 20)

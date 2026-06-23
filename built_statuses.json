@@ -1,0 +1,31 @@
+{
+  "statuses": [
+    {
+      "id": "sinking",
+      "name": "Sinking",
+      "description": "Sinks",
+      "decays": true,
+      "effects": [
+        {
+          "trigger": "on_take_damage",
+          "action": {
+            "type": "damage_by_potency",
+            "target": "self",
+            "status": "",
+            "multiplier": 1
+          },
+          "condition": null
+        },
+        {
+          "trigger": "on_take_damage",
+          "action": {
+            "type": "gain_shield",
+            "target": "self",
+            "amount": 5
+          },
+          "condition": null
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "skills": [
+    {
+      "id": "anchor_skill",
+      "name": "Anchor",
+      "description": "Anchors",
+      "cost": 0,
+      "targeting_type": "enemy",
+      "dice": [
+        {
+          "type": "attack",
+          "range": [
+            1,
+            6
+          ],
+          "effects": [
+            {
+              "trigger": "on_win",
+              "action": {
+                "type": "inflict_status",
+                "target": "target",
+                "status": "sinking",
+                "potency": 5,
+                "count": 2
+              },
+              "condition": null
+            },
+            {
+              "trigger": "on_unopposed_attack",
+              "action": {
+                "type": "inflict_status",
+                "target": "target",
+                "status": "sinking",
+                "potency": 10,
+                "count": 5
+              },
+              "condition": null
+            }
+          ]
+        }
+      ],
+      "effects": []
+    }
+  ]
+}

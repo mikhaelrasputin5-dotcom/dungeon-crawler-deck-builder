@@ -1,0 +1,17 @@
+{
+  "enemies": [
+    {
+      "id": "wraith",
+      "name": "Captain",
+      "description": "Captain_desc",
+      "HP": 80,
+      "SR": 50,
+      "resist": {},
+      "deck": [
+        "Anchor"
+      ],
+      "max_points": -1,
+      "pending_statuses": []
+    }
+  ]
+}
