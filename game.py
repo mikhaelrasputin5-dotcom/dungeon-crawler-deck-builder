@@ -2,17 +2,15 @@ from enum import Enum, auto
 import random
 from pathlib import Path
 from typing import Optional
-
 import pygame
 from pygame import Vector2
-
 from creature import Creature
 from skillslot import Skillslot
 from context import Context
 from engine import Engine
 from floor import Floor, RoomRect
 from tile import HiddenTile
-from config import GRID_WIDTH, GRID_HEIGHT, TILE_SIZE, COLOR_BG
+from config import GW, GH, TS, CBG
 
 class GameState(Enum):
     INIT = auto()
@@ -22,755 +20,638 @@ class GameState(Enum):
     GAME_OVER = auto()
 
 class Game:
-    def __init__(self, playerchar: Creature, width: int = GRID_WIDTH, height: int = GRID_HEIGHT, seed: int | None = None, engine: Engine | None = None):
-        self.playerchar = playerchar
-        self.enemy_list = []
-        self.res_order: list[Skillslot] = []
-        self.engine = engine if engine is not None else Engine()
+    def __init__(self, pc, w=GW, h=GH, seed=None, engine=None):
+        self.pc = pc
+        self.ene_lst = []
+        self.res_ord = []
+        self.eng = engine if engine else Engine()
         self.state = GameState.INIT
-        self.seed = seed if seed is not None else random.randrange(2**31)
-        self.floor = Floor(width, height, seed=self.seed)
-        self.current_floor = 1
-        self.playerchar.pos = self.floor.start
-        self.playerchar.layout = self
-        self.playerchar.points = self.playerchar.max_points if self.playerchar.max_points > 0 else 0
-        self.player_room: RoomRect | None = self.floor.get_room_at(*self.playerchar.pos)
-        self.combat_room: RoomRect | None = None
-        self.statuses = self.engine.load_all_statuses()
-        self.resolution_queue: list[dict] = []
-        self.current_resolution_event: dict | None = None
-        self.resolution_active = False
-        self.damage_numbers: list[dict] = []
-        self.status_numbers: list[dict] = []
-        self.attack_animations: list[dict] = []
-        self.attack_animation_frames: dict[str, list[pygame.Surface]] = {}
-        self._load_attack_animation_frames()
-
+        self.seed = seed if seed else random.randrange(2**31)
+        self.flr = Floor(w, h, seed=self.seed)
+        self.cur_flr = 1
+        self.pc.pos = self.flr.start
+        self.pc.layout = self
+        self.pc.pts = self.pc.max_pts if self.pc.max_pts > 0 else 0
+        self.p_room = self.flr.get_room_at(*self.pc.pos)
+        self.c_room = None
+        self.stat = self.eng.load_all_st()
+        self.res_q = []
+        self.cur_res_ev = None
+        self.res_act = False
+        self.dmg_num = []
+        self.stat_num = []
+        self.atk_anim = []
+        self.atk_anim_fr = {}
+        self._load_atk_anim()
         try:
-            self.playerchar.effects.append(self.engine.load_effect('restore_points'))
+            self.pc.fx.append(self.eng.load_fx('restore_points'))
         except ValueError:
             pass
-
-        self.apply_default_turn_end_effects(self.playerchar)
+        self._apply_def_turn_end_fx(self.pc)
         self.set_state(GameState.EXPLORING)
 
-    def add_damage_number(self, creature: Creature, amount: int) -> None:
-        if amount <= 0:
+    def add_dmg_num(self, c, a):
+        if a <= 0:
             return
-        extra = self._popup_stack_offset(creature)
-        x = creature.pos[0] * TILE_SIZE + TILE_SIZE // 2 + extra[0]
-        y = creature.pos[1] * TILE_SIZE + extra[1]
-        self.damage_numbers.append({
-            'target': creature,
-            'text': f'-{amount}',
-            'x': x,
-            'y': y,
-            'vy': -40,
-            'age': 0,
-            'duration': 900,
-            'color': (255, 80, 80),
+        ex = self._pop_ofs(c)
+        x = c.pos[0] * TS + TS // 2 + ex[0]
+        y = c.pos[1] * TS + ex[1]
+        self.dmg_num.append({
+            'tgt': c, 'txt': f'-{a}', 'x': x, 'y': y, 'vy': -40,
+            'age': 0, 'dur': 900, 'col': (255, 80, 80),
         })
 
-    def add_status_number(self, creature: Creature, text: str) -> None:
-        if not text:
+    def add_stat_num(self, c, txt):
+        if not txt:
             return
-        extra = self._popup_stack_offset(creature)
-        x = creature.pos[0] * TILE_SIZE + TILE_SIZE // 2 + extra[0]
-        y = creature.pos[1] * TILE_SIZE + extra[1]
-        self.status_numbers.append({
-            'target': creature,
-            'text': text,
-            'x': x,
-            'y': y,
-            'vy': -40,
-            'age': 0,
-            'duration': 900,
-            'color': (100, 220, 220),
+        ex = self._pop_ofs(c)
+        x = c.pos[0] * TS + TS // 2 + ex[0]
+        y = c.pos[1] * TS + ex[1]
+        self.stat_num.append({
+            'tgt': c, 'txt': txt, 'x': x, 'y': y, 'vy': -40,
+            'age': 0, 'dur': 900, 'col': (100, 220, 220),
         })
 
-    def _popup_stack_offset(self, creature: Creature) -> tuple[int, int]:
-        existing = [n for n in self.damage_numbers + self.status_numbers if n['target'] == creature]
-        offset_index = len(existing)
-        x_offset = (offset_index % 2) * 12 - 6
-        y_offset = offset_index * 16
-        return (x_offset, y_offset)
+    def _pop_ofs(self, c):
+        ex = [n for n in self.dmg_num + self.stat_num if n['tgt'] == c]
+        oi = len(ex)
+        xo = (oi % 2) * 12 - 6
+        yo = oi * 16
+        return (xo, yo)
 
-    def _load_attack_animation_frames(self) -> None:
-        animation_dir = Path(__file__).resolve().parent / 'animations'
-        self.attack_animation_frames = {}
-
-        for kind in ('blunt', 'slash', 'pierce'):
-            path = animation_dir / f'basic_{kind}.png'
+    def _load_atk_anim(self):
+        ad = Path(__file__).resolve().parent / 'animations'
+        self.atk_anim_fr = {}
+        for k in ('blunt', 'slash', 'pierce'):
+            p = ad / f'basic_{k}.png'
             try:
-                sheet = pygame.image.load(str(path))
+                sh = pygame.image.load(str(p))
             except pygame.error:
                 continue
-
-            frame_height = sheet.get_height()
-            if frame_height <= 0:
+            fh = sh.get_height()
+            if fh <= 0:
                 continue
+            fc = max(1, sh.get_width() // fh)
+            fw = sh.get_width() // fc
+            fr = [sh.subsurface(pygame.Rect(i * fw, 0, fw, fh)).copy() for i in range(fc)]
+            self.atk_anim_fr[k] = fr
 
-            frame_count = max(1, sheet.get_width() // frame_height)
-            frame_width = sheet.get_width() // frame_count
-            frames = [
-                sheet.subsurface(pygame.Rect(i * frame_width, 0, frame_width, frame_height)).copy()
-                for i in range(frame_count)
-            ]
-            self.attack_animation_frames[kind] = frames
-
-    def add_attack_animation(self, creature: Creature, damage_type: str) -> None:
-        key = 'slash'
-        lowered = damage_type.lower()
-        if 'blunt' in lowered:
-            key = 'blunt'
-        elif 'slash' in lowered:
-            key = 'slash'
-        elif 'pierce' in lowered:
-            key = 'pierce'
-
-        frames = self.attack_animation_frames.get(key)
-        if not frames:
-            self._load_attack_animation_frames()
-            frames = self.attack_animation_frames.get(key)
-
-        if not frames:
+    def add_atk_anim(self, c, dt):
+        k = 'slash'
+        dl = dt.lower()
+        if 'blunt' in dl:
+            k = 'blunt'
+        elif 'slash' in dl:
+            k = 'slash'
+        elif 'pierce' in dl:
+            k = 'pierce'
+        fr = self.atk_anim_fr.get(k)
+        if not fr:
+            self._load_atk_anim()
+            fr = self.atk_anim_fr.get(k)
+        if not fr:
             return
-
-        self.attack_animations.append({
-            'target': creature,
-            'frames': frames,
-            'age': 0,
-            'duration': 220,
-            'offset': (0, -6),
+        self.atk_anim.append({
+            'tgt': c, 'fr': fr, 'age': 0, 'dur': 220, 'ofs': (0, -6),
         })
 
-    def update_damage_numbers(self, dt: int) -> None:
-        if not self.damage_numbers and not self.status_numbers:
+    def upd_dmg_num(self, dt):
+        if not self.dmg_num and not self.stat_num:
             return
+        rd = []
+        for n in self.dmg_num:
+            n['age'] += dt
+            n['y'] += n['vy'] * (dt / 1000.0)
+            if n['age'] < n['dur']:
+                rd.append(n)
+        self.dmg_num = rd
+        rs = []
+        for n in self.stat_num:
+            n['age'] += dt
+            n['y'] += n['vy'] * (dt / 1000.0)
+            if n['age'] < n['dur']:
+                rs.append(n)
+        self.stat_num = rs
 
-        remaining_damage = []
-        for number in self.damage_numbers:
-            number['age'] += dt
-            number['y'] += number['vy'] * (dt / 1000.0)
-            if number['age'] < number['duration']:
-                remaining_damage.append(number)
-        self.damage_numbers = remaining_damage
-
-        remaining_status = []
-        for number in self.status_numbers:
-            number['age'] += dt
-            number['y'] += number['vy'] * (dt / 1000.0)
-            if number['age'] < number['duration']:
-                remaining_status.append(number)
-        self.status_numbers = remaining_status
-
-    def update_attack_animations(self, dt: int) -> None:
-        if not self.attack_animations:
+    def upd_atk_anim(self, dt):
+        if not self.atk_anim:
             return
+        rm = []
+        for a in self.atk_anim:
+            a['age'] += dt
+            if a['age'] < a['dur']:
+                rm.append(a)
+        self.atk_anim = rm
 
-        remaining = []
-        for animation in self.attack_animations:
-            animation['age'] += dt
-            if animation['age'] < animation['duration']:
-                remaining.append(animation)
-        self.attack_animations = remaining
+    def draw_atk_anim(self, surf, ofs=(0, 0)):
+        for a in self.atk_anim:
+            prg = min(1.0, a['age'] / a['dur'])
+            idx = min(len(a['fr']) - 1, int(prg * len(a['fr'])))
+            fr = a['fr'][idx]
+            x = a['tgt'].pos[0] * TS + TS // 2 + ofs[0] + a['ofs'][0]
+            y = a['tgt'].pos[1] * TS + TS // 2 + ofs[1] + a['ofs'][1]
+            r = fr.get_rect(center=(x, y))
+            surf.blit(fr, r)
 
-    def draw_attack_animations(self, surface, offset: tuple[int, int] = (0, 0)) -> None:
-        for animation in self.attack_animations:
-            progress = min(1.0, animation['age'] / animation['duration'])
-            index = min(len(animation['frames']) - 1, int(progress * len(animation['frames'])))
-            frame = animation['frames'][index]
-            x = animation['target'].pos[0] * TILE_SIZE + TILE_SIZE // 2 + offset[0] + animation['offset'][0]
-            y = animation['target'].pos[1] * TILE_SIZE + TILE_SIZE // 2 + offset[1] + animation['offset'][1]
-            rect = frame.get_rect(center=(x, y))
-            surface.blit(frame, rect)
+    def set_state(self, ns):
+        self.state = ns
 
-    def set_state(self, new_state: GameState) -> None:
-        self.state = new_state
-
-    def apply_default_turn_end_effects(self, creature: Creature) -> None:
-        for effect_id in ['refresh_if_deck_empty', 'draw_if_empty_hand']:
+    def _apply_def_turn_end_fx(self, c):
+        for fid in ['refresh_if_deck_empty', 'draw_if_empty_hand']:
             try:
-                creature.effects.append(self.engine.load_effect(effect_id))
+                c.fx.append(self.eng.load_fx(fid))
             except ValueError:
                 pass
 
-    def create_floor(self, seed: int | None = None, screen=None) -> None:
-        self.seed = seed if seed is not None else random.randrange(2**31)
-        self.floor = Floor(self.floor.width, self.floor.height, seed=self.seed)
-        self.playerchar.pos = self.floor.start
-        self.player_room = self.floor.get_room_at(*self.playerchar.pos)
-        if screen is not None:
-            self._render_floor_in_pygame(screen)
+    def create_flr(self, seed=None, scr=None):
+        self.seed = seed if seed else random.randrange(2**31)
+        self.flr = Floor(self.flr.w, self.flr.h, seed=self.seed)
+        self.pc.pos = self.flr.start
+        self.p_room = self.flr.get_room_at(*self.pc.pos)
+        if scr:
+            self._rend_flr(scr)
 
-    def advance_floor(self, screen=None) -> None:
-        self.current_floor += 1
-        self.create_floor(screen=screen)
+    def adv_flr(self, scr=None):
+        self.cur_flr += 1
+        self.create_flr(scr=scr)
         self.set_state(GameState.EXPLORING)
 
-    def _render_floor_in_pygame(self, surface) -> None:
+    def _rend_flr(self, sf):
         pygame.event.pump()
-        surface.fill(COLOR_BG)
-        self.draw_floor(surface)
+        sf.fill(CBG)
+        self.draw_flr(sf)
         pygame.display.flip()
 
-    def draw_floor(self, surface, offset: tuple[int, int] = (0, 0)) -> None:
-        player_pixel = Vector2(
-            self.playerchar.pos[0] * TILE_SIZE + TILE_SIZE / 2 + offset[0],
-            self.playerchar.pos[1] * TILE_SIZE + TILE_SIZE / 2 + offset[1]
-        )
-
-        for row in self.floor.tiles:
+    def draw_flr(self, sf, ofs=(0, 0)):
+        pp = Vector2(self.pc.pos[0] * TS + TS / 2 + ofs[0],
+                     self.pc.pos[1] * TS + TS / 2 + ofs[1])
+        for row in self.flr.tiles:
             for tile in row:
                 if isinstance(tile, HiddenTile):
-                    tile.draw(surface, player_pixel, offset)
+                    tile.draw(sf, pp, ofs)
                 else:
-                    tile.draw(surface, offset)
+                    tile.draw(sf, ofs)
+        pygame.draw.circle(sf, (255, 50, 50), pp, TS // 3)
+        if self.flr.start:
+            sp = Vector2(self.flr.start[0] * TS + TS / 2 + ofs[0],
+                        self.flr.start[1] * TS + TS / 2 + ofs[1])
+            pygame.draw.circle(sf, (50, 255, 50), sp, TS // 4)
+        if self.flr.exit:
+            pygame.draw.rect(sf, (255, 255, 50),
+                            pygame.Rect(self.flr.exit[0] * TS + ofs[0],
+                                       self.flr.exit[1] * TS + ofs[1], TS, TS), 2)
 
-        pygame.draw.circle(surface, (255, 50, 50), player_pixel, TILE_SIZE // 3)
+    def can_walk(self, x, y):
+        return self.flr.is_walk(x, y)
 
-        if self.floor.start is not None:
-            start_pixel = Vector2(
-                self.floor.start[0] * TILE_SIZE + TILE_SIZE / 2 + offset[0],
-                self.floor.start[1] * TILE_SIZE + TILE_SIZE / 2 + offset[1]
-            )
-            pygame.draw.circle(surface, (50, 255, 50), start_pixel, TILE_SIZE // 4)
-
-        if self.floor.exit is not None:
-            pygame.draw.rect(
-                surface,
-                (255, 255, 50),
-                pygame.Rect(
-                    self.floor.exit[0] * TILE_SIZE + offset[0],
-                    self.floor.exit[1] * TILE_SIZE + offset[1],
-                    TILE_SIZE,
-                    TILE_SIZE,
-                ),
-                2,
-            )
-
-    def can_walk(self, x: int, y: int) -> bool:
-        return self.floor.is_walkable(x, y)
-
-    def move_player(self, dx: int, dy: int) -> bool:
+    def move_pc(self, dx, dy):
         if self.state != GameState.EXPLORING:
             return False
-
-        x, y = self.playerchar.pos
-        target_x, target_y = x + dx, y + dy
-        if not self.can_walk(target_x, target_y):
+        x, y = self.pc.pos
+        tx, ty = x + dx, y + dy
+        if not self.can_walk(tx, ty):
             return False
-
-        self.playerchar.pos = (target_x, target_y)
-        tile = self.floor.get_tile(target_x, target_y)
-        if tile is not None:
-            tile.on_enter(self, self.playerchar)
-
-        new_room = self.floor.get_room_at(target_x, target_y)
-        previous_room = self.player_room
-        if new_room is not previous_room:
-            self.player_room = new_room
-            enemies = self.encounter_found(new_room)
-            if enemies:
-                self.enter_combat(enemies, new_room)
+        self.pc.pos = (tx, ty)
+        t = self.flr.get_tile(tx, ty)
+        if t:
+            t.on_enter(self, self.pc)
+        nr = self.flr.get_room_at(tx, ty)
+        pr = self.p_room
+        if nr != pr:
+            self.p_room = nr
+            ene = self.enc_found(nr)
+            if ene:
+                self.enter_combat(ene, nr)
                 return True
-
-        if self.state == GameState.EXPLORING and (target_x, target_y) == self.floor.exit:
-            self.advance_floor()
-
+        if self.state == GameState.EXPLORING and (tx, ty) == self.flr.exit:
+            self.adv_flr()
         return True
 
-    def update(self, action: dict | None = None) -> bool:
-        if self.state != GameState.EXPLORING or action is None:
+    def upd(self, act=None):
+        if self.state != GameState.EXPLORING or act is None:
             return False
-
-        match action.get('type'):
-            case 'move' if isinstance(action.get('direction'), tuple):
-                dx, dy = action['direction']
-                return self.move_player(dx, dy)
+        match act.get('type'):
+            case 'move' if isinstance(act.get('direction'), tuple):
+                dx, dy = act['direction']
+                return self.move_pc(dx, dy)
             case _:
                 return False
 
-    def enter_combat(self, enemies: list[Creature], room: RoomRect | None = None) -> None:
-        self.enemy_list = enemies
-        self.res_order.clear()
-        self.combat_room = room
-        if room is not None:
-            self.floor.lock_room(room)
+    def enter_combat(self, ene, room=None):
+        self.ene_lst = ene
+        self.res_ord.clear()
+        self.c_room = room
+        if room:
+            self.flr.lock_room(room)
         self.set_state(GameState.COMBAT)
         self.begin_turn()
 
-    def begin_turn(self) -> None:
-        self.res_order.clear()
-        self.playerchar.apply_pending_statuses()
-        for enemy in self.enemy_list:
-            if enemy.is_alive():
-                enemy.apply_pending_statuses()
+    def begin_turn(self):
+        self.res_ord.clear()
+        self.pc.apply_pend_stat()
+        for e in self.ene_lst:
+            if e.is_alive():
+                e.apply_pend_stat()
+        mc = Context(game=self, target=None, slot=None, damage=0)
+        self.mass_bc('turn_start', 'turn_start', mc)
+        self._autopilot_ene()
+        if self.pc.is_stag() and any(s.owner != self.pc for s in self.res_ord):
+            self.exec_turn()
 
-        mass_context = Context(game=self, target=None, slot=None, damage=0)
-        self.mass_broadcast('turn_start', 'turn_start', mass_context)
-        self.autopilot_enemies()
-        if self.playerchar.is_staggered() and any(slot.owner != self.playerchar for slot in self.res_order):
-            self.execute_turn()
+    def _autopilot_ene(self):
+        for e in self.ene_lst:
+            if e.is_alive() and not e.is_stag():
+                e.autopilot()
 
-    def autopilot_enemies(self) -> None:
-        for enemy in self.enemy_list:
-            if enemy.is_alive() and not enemy.is_staggered():
-                enemy.autopilot()
+    def exec_turn(self):
+        mc = Context(game=self, target=None, slot=None, damage=0)
+        self.mass_bc('resolve_start', 'resolve_start', mc)
+        self.start_res()
 
-    def execute_turn(self) -> None:
-        mass_context = Context(game=self, target=None, slot=None, damage=0)
-        self.mass_broadcast('resolve_start', 'resolve_start', mass_context)
-        self.start_resolution()
-
-    def start_resolution(self) -> None:
-        self.resolution_queue = []
-        self.current_resolution_event = None
-        self.resolution_active = False
-        self._build_resolution_queue()
-        if self.resolution_queue:
-            self.resolution_active = True
+    def start_res(self):
+        self.res_q = []
+        self.cur_res_ev = None
+        self.res_act = False
+        self._build_res_q()
+        if self.res_q:
+            self.res_act = True
         else:
-            self._finish_resolution()
+            self._finish_res()
 
-    def step_resolution(self) -> None:
-        if not self.resolution_active:
+    def step_res(self):
+        if not self.res_act:
             return
-        if not self.resolution_queue:
-            self._finish_resolution()
+        if not self.res_q:
+            self._finish_res()
             return
+        ev = self.res_q.pop(0)
+        self.cur_res_ev = ev
+        self._proc_res_ev(ev)
+        if not self.res_q:
+            self._finish_res()
 
-        event = self.resolution_queue.pop(0)
-        self.current_resolution_event = event
-        self._process_resolution_event(event)
-
-        if not self.resolution_queue:
-            self._finish_resolution()
-
-    def _finish_resolution(self) -> None:
-        self.resolution_active = False
-        self.current_resolution_event = None
-        mass_context = Context(game=self, target=None, slot=None, damage=0)
-        self.mass_broadcast('turn_end', 'turn_end', mass_context)
-
-        for creature in [self.playerchar] + self.enemy_list:
-            if creature.is_alive():
-                creature.draw_skills(1)
-
-        self.playerchar.decay_status()
-        self._recover_staggered_SR(self.playerchar)
-        for enemy in self.enemy_list:
-            enemy.decay_status()
-            self._recover_staggered_SR(enemy)
-
+    def _finish_res(self):
+        self.res_act = False
+        self.cur_res_ev = None
+        mc = Context(game=self, target=None, slot=None, damage=0)
+        self.mass_bc('turn_end', 'turn_end', mc)
+        for c in [self.pc] + self.ene_lst:
+            if c.is_alive():
+                c.draw_sk(1)
+        self.pc.decay_stat()
+        self._recover_stag_sr(self.pc)
+        for e in self.ene_lst:
+            e.decay_stat()
+            self._recover_stag_sr(e)
         if self.state == GameState.COMBAT:
-            if not any(e.is_alive() for e in self.enemy_list):
+            if not any(e.is_alive() for e in self.ene_lst):
                 self.exit_combat()
             else:
                 self.begin_turn()
 
-    def _build_resolution_queue(self) -> None:
-        snapshot = sorted(self.res_order, key=lambda s: s.get_speed(), reverse=True)
-        processed = set()
-
-        for slot in snapshot:
-            if id(slot) in processed:
+    def _build_res_q(self):
+        snap = sorted(self.res_ord, key=lambda s: s.get_speed(), reverse=True)
+        proc = set()
+        for sl in snap:
+            if id(sl) in proc:
                 continue
-
-            if slot.owner is None or not slot.owner.is_alive():
+            if not sl.owner or not sl.owner.is_alive():
                 continue
-
-            defender = slot.get_target_creature()
-            targets = self.get_skill_targets(slot)
-            if not targets:
+            def_ = sl.get_target_creature()
+            tgts = self.get_sk_tgts(sl)
+            if not tgts:
                 continue
-
-            primary_target = defender if defender and defender.is_alive() else next((t for t in targets if t.is_alive()), None)
-            if primary_target is None:
+            pt = def_ if def_ and def_.is_alive() else next((t for t in tgts if t.is_alive()), None)
+            if not pt:
                 continue
-
-            counter_slot = next(
-                (s for s in snapshot
-                 if s.owner == defender
-                 and s.get_target_creature() == slot.owner
-                 and id(s) not in processed),
-                None
-            )
-
-            if slot.assigned_skill is None:
+            csl = next((s for s in snap if s.owner == def_ and s.get_target_creature() == sl.owner and id(s) not in proc), None)
+            if not sl.sk:
                 continue
-            if counter_slot is not None:
-                if counter_slot.assigned_skill is None:
+            if csl:
+                if not csl.sk:
                     continue
-                self.resolution_queue.extend(self._build_clash_sequence(slot, counter_slot, primary_target))
-                processed.add(id(counter_slot))
+                self.res_q.extend(self._build_clash_seq(sl, csl, pt))
+                proc.add(id(csl))
             else:
-                self.resolution_queue.extend(self._build_attack_sequence(slot, primary_target))
+                self.res_q.extend(self._build_atk_seq(sl, pt))
+            proc.add(id(sl))
+        self.res_ord.clear()
 
-            processed.add(id(slot))
-
-        self.res_order.clear()
-
-    def _build_clash_sequence(self, slot: Skillslot, counter_slot: Skillslot, primary_target: Creature) -> list[dict]:
-        attacker = slot.owner
-        defender = primary_target
-        skill = slot.assigned_skill
-        opponent_skill = counter_slot.assigned_skill
-
-        my_dice = [die.copy() for die in skill.dice]
-        their_dice = [die.copy() for die in opponent_skill.dice]
-
-        base_context = Context(
-            game=self,
-            attacker=attacker,
-            defender=defender,
-            target=slot.get_target_creature() or primary_target,
-            skill=skill,
-            opponent_skill=opponent_skill,
-            slot=slot,
-            opponent_slot=counter_slot,
-            die=None,
-            index=-1,
-            clash_history=[],
-            damage=0,
-            targets=self.get_skill_targets(slot),
-            target_positions=slot.get_target_positions()
+    def _build_clash_seq(self, sl, csl, pt):
+        atk = sl.owner
+        def_ = pt
+        sk = sl.sk
+        osk = csl.sk
+        md = [d.copy() for d in sk.dice]
+        td = [d.copy() for d in osk.dice]
+        bc = Context(
+            game=self, attacker=atk, defender=def_, target=sl.get_target_creature() or pt,
+            skill=sk, opponent_skill=osk, slot=sl, opponent_slot=csl, die=None, index=-1,
+            clash_history=[], damage=0, targets=self.get_sk_tgts(sl), target_positions=sl.get_target_positions()
         )
-
-        sequence = [
-            {
-                'type': 'clash_start',
-                'context': base_context,
-                'description': f'{attacker.name} clashes with {defender.name}'
-            }
-        ]
-
-        min_len = min(len(my_dice), len(their_dice))
-        for idx in range(min_len):
-            sequence.append({
-                'type': 'clash_die',
-                'index': idx,
-                'context': base_context,
-                'my_die': my_dice[idx],
-                'their_die': their_dice[idx],
-                'player_is_attacker': attacker == self.playerchar,
-                'description': f'Clash roll {idx + 1}'
+        seq = [{'type': 'clash_start', 'context': bc, 'description': f'{atk.name} clashes with {def_.name}'}]
+        ml = min(len(md), len(td))
+        for i in range(ml):
+            seq.append({
+                'type': 'clash_die', 'index': i, 'context': bc,
+                'my_die': md[i], 'their_die': td[i],
+                'player_is_attacker': atk == self.pc, 'description': f'Clash roll {i + 1}'
             })
+        if len(td) > ml:
+            seq.extend(self._build_atk_seq(csl, sl.owner, start_index=ml, use_slot=csl))
+        elif len(md) > ml:
+            seq.extend(self._build_atk_seq(sl, pt, start_index=ml, use_slot=sl))
+        seq.append({'type': 'sequence_end', 'slot': sl, 'counter_slot': csl})
+        return seq
 
-        if len(their_dice) > min_len:
-            sequence.extend(self._build_attack_sequence(counter_slot, slot.owner, start_index=min_len, use_slot=counter_slot))
-        elif len(my_dice) > min_len:
-            sequence.extend(self._build_attack_sequence(slot, primary_target, start_index=min_len, use_slot=slot))
-
-        sequence.append({
-            'type': 'sequence_end',
-            'slot': slot,
-            'counter_slot': counter_slot
-        })
-        return sequence
-
-    def _build_attack_sequence(self, slot: Skillslot, primary_target: Creature, start_index: int = 0, use_slot: Skillslot | None = None) -> list[dict]:
-        if use_slot is None:
-            use_slot = slot
-        skill = use_slot.assigned_skill
-        attacker = use_slot.owner
-        targets = self.get_skill_targets(use_slot)
-
-        context = Context(
-            game=self,
-            attacker=attacker,
-            defender=primary_target,
-            target=use_slot.get_target_creature() or primary_target,
-            skill=skill,
-            slot=use_slot,
-            die=None,
-            index=-1,
-            clash_history=[],
-            damage=0,
-            targets=targets,
-            target_positions=use_slot.get_target_positions()
+    def _build_atk_seq(self, sl, pt, start_index=0, use_slot=None):
+        if not use_slot:
+            use_slot = sl
+        sk = use_slot.sk
+        atk = use_slot.owner
+        tgts = self.get_sk_tgts(use_slot)
+        ctx = Context(
+            game=self, attacker=atk, defender=pt, target=use_slot.get_target_creature() or pt,
+            skill=sk, slot=use_slot, die=None, index=-1, clash_history=[], damage=0,
+            targets=tgts, target_positions=use_slot.get_target_positions()
         )
-
-        sequence = [
-            {
-                'type': 'attack_start',
-                'context': context,
-                'start_index': start_index,
-                'player_attack': attacker == self.playerchar,
-                'description': f'{attacker.name} begins an unopposed attack'
-            }
-        ]
-
-        dice = [die.copy() for die in skill.dice]
-        for idx in range(start_index, len(dice)):
-            sequence.append({
-                'type': 'attack_die',
-                'index': idx,
-                'context': context,
-                'die': dice[idx],
-                'player_attack': attacker == self.playerchar,
-                'description': f'Attack roll {idx + 1}'
+        seq = [{'type': 'attack_start', 'context': ctx, 'start_index': start_index,
+               'player_attack': atk == self.pc, 'description': f'{atk.name} begins an unopposed attack'}]
+        d = [die.copy() for die in sk.dice]
+        for i in range(start_index, len(d)):
+            seq.append({
+                'type': 'attack_die', 'index': i, 'context': ctx, 'die': d[i],
+                'player_attack': atk == self.pc, 'description': f'Attack roll {i + 1}'
             })
+        seq.append({'type': 'sequence_end', 'slot': use_slot, 'counter_slot': None})
+        return seq
 
-        sequence.append({
-            'type': 'sequence_end',
-            'slot': use_slot,
-            'counter_slot': None
-        })
-        return sequence
-
-    def _process_resolution_event(self, event: dict) -> None:
-        etype = event.get('type')
-
-        match etype:
+    def _proc_res_ev(self, ev):
+        et = ev.get('type')
+        match et:
             case 'clash_start':
-                context = event['context']
-                context.phase = 'clash'
-                context.attacker.process_effects('on_play', context)
-                context.skill.process_effects('on_play', context)
-                context.skill.process_effects('on_clash_start', context)
-
+                ctx = ev['context']
+                ctx.phase = 'clash'
+                ctx.atk.fx_proc('on_play', ctx)
+                ctx.sk.fx_proc('on_play', ctx)
+                ctx.sk.fx_proc('on_clash_start', ctx)
             case 'clash_die':
-                context = event['context']
-                context.phase = 'clash'
-                context.index = event['index']
-                context.skill.process_effects('on_clash', context)
-
-                attacker = context.attacker
-                defender = context.defender
-                my_die = event['my_die']
-                their_die = event['their_die']
-
-                context.die = my_die
-                context.attacker = attacker
-                context.defender = defender
-                attacker.process_effects('on_die_roll', context)
-                my_die.process_effects('on_die_roll', context)
-                attacker_roll = my_die.roll(context)
-
-                context.die = their_die
-                context.attacker = defender
-                context.defender = attacker
-                defender.process_effects('on_die_roll', context)
-                their_die.process_effects('on_die_roll', context)
-                defender_roll = their_die.roll(context)
-
-                context.clash_history.append((attacker_roll, defender_roll))
-                event['attacker_roll'] = attacker_roll
-                event['defender_roll'] = defender_roll
-
-                if attacker_roll > defender_roll:
-                    context.damage = attacker_roll - defender_roll
-                    context.die = my_die
-                    context.attacker = attacker
-                    context.defender = defender
-                    attacker.process_effects('on_win', context)
-                    my_die.process_effects('on_win', context)
-                    target = context.get_opponent(attacker)
-                    target.take_damage(context.damage, my_die.type, context)
-                elif defender_roll > attacker_roll:
-                    context.damage = defender_roll - attacker_roll
-                    context.die = their_die
-                    context.attacker = defender
-                    context.defender = attacker
-                    defender.process_effects('on_win', context)
-                    their_die.process_effects('on_win', context)
-                    target = context.get_opponent(defender)
-                    target.take_damage(context.damage, their_die.type, context)
+                ctx = ev['context']
+                ctx.phase = 'clash'
+                ctx.idx = ev['index']
+                ctx.sk.fx_proc('on_clash', ctx)
+                atk = ctx.atk
+                def_ = ctx.def_
+                md = ev['my_die']
+                td = ev['their_die']
+                ctx.die = md
+                ctx.atk = atk
+                ctx.def_ = def_
+                atk.fx_proc('on_die_roll', ctx)
+                md.fx_proc('on_die_roll', ctx)
+                ar = md.roll(ctx)
+                ctx.die = td
+                ctx.atk = def_
+                ctx.def_ = atk
+                def_.fx_proc('on_die_roll', ctx)
+                td.fx_proc('on_die_roll', ctx)
+                dr = td.roll(ctx)
+                ctx.ch.append((ar, dr))
+                ev['attacker_roll'] = ar
+                ev['defender_roll'] = dr
+                if ar > dr:
+                    ctx.dmg = ar - dr
+                    ctx.die = md
+                    ctx.atk = atk
+                    ctx.def_ = def_
+                    atk.fx_proc('on_win', ctx)
+                    md.fx_proc('on_win', ctx)
+                    tgt = ctx.get_opponent(atk)
+                    tgt.take_dmg(ctx.dmg, md.type, ctx)
+                elif dr > ar:
+                    ctx.dmg = dr - ar
+                    ctx.die = td
+                    ctx.atk = def_
+                    ctx.def_ = atk
+                    def_.fx_proc('on_win', ctx)
+                    td.fx_proc('on_win', ctx)
+                    tgt = ctx.get_opponent(def_)
+                    tgt.take_dmg(ctx.dmg, td.type, ctx)
                 else:
-                    event['result'] = 'tie'
-
+                    ev['result'] = 'tie'
             case 'attack_start':
-                context = event['context']
-                context.phase = 'attack'
-                context.opponent_skill = None
-                context.opponent_slot = None
-                context.attacker.process_effects('on_play', context)
-                context.skill.process_effects('on_play', context)
-                context.skill.process_effects('on_unopposed_attack', context)
-
+                ctx = ev['context']
+                ctx.phase = 'attack'
+                ctx.opp_sk = None
+                ctx.opp_sl = None
+                ctx.atk.fx_proc('on_play', ctx)
+                ctx.sk.fx_proc('on_play', ctx)
+                ctx.sk.fx_proc('on_unopposed_attack', ctx)
             case 'attack_die':
-                context = event['context']
-                context.phase = 'attack'
-                context.index = event['index']
-                context.die = event['die']
-
-                attacker = context.attacker
-                context.attacker.process_effects('on_die_roll', context)
-                context.die.process_effects('on_die_roll', context)
-                roll = context.die.roll(context)
-                event['roll'] = roll
-
-                targets = context.targets or ([context.defender] if context.defender else [])
-                for target in targets:
-                    if target is None or not target.is_alive():
+                ctx = ev['context']
+                ctx.phase = 'attack'
+                ctx.idx = ev['index']
+                ctx.die = ev['die']
+                atk = ctx.atk
+                ctx.atk.fx_proc('on_die_roll', ctx)
+                ctx.die.fx_proc('on_die_roll', ctx)
+                rll = ctx.die.roll(ctx)
+                ev['roll'] = rll
+                tgts = ctx.tgts or ([ctx.def_] if ctx.def_ else [])
+                for tgt in tgts:
+                    if not tgt or not tgt.is_alive():
                         continue
-                    target_context = context.with_target(target)
-                    context.skill.process_effects('on_hit', target_context)
-                    context.die.process_effects('on_hit', target_context)
-                    context.die.process_effects('on_unopposed_hit', target_context)
-                    target.take_damage(roll, context.die.type, target_context)
-
+                    tc = ctx.with_target(tgt)
+                    ctx.sk.fx_proc('on_hit', tc)
+                    ctx.die.fx_proc('on_hit', tc)
+                    ctx.die.fx_proc('on_unopposed_hit', tc)
+                    tgt.take_dmg(rll, ctx.die.type, tc)
             case 'sequence_end':
-                slot = event['slot']
-                counter_slot = event.get('counter_slot')
-                context = Context(game=self, attacker=slot.owner, defender=slot.get_target_creature() or None, skill=slot.assigned_skill, slot=slot, die=None, index=-1, clash_history=[], damage=0)
-                if slot.owner:
-                    slot.owner.process_effects('on_attack_end', context)
-                    slot.owner.discard(slot.assigned_skill, context)
-                if counter_slot is not None and counter_slot.owner:
-                    counter_context = Context(game=self, attacker=counter_slot.owner, defender=counter_slot.get_target_creature() or None, skill=counter_slot.assigned_skill, slot=counter_slot, die=None, index=-1, clash_history=[], damage=0)
-                    counter_slot.owner.process_effects('on_attack_end', counter_context)
-                    counter_slot.owner.discard(counter_slot.assigned_skill, counter_context)
+                sl = ev['slot']
+                csl = ev.get('counter_slot')
+                ctx = Context(game=self, attacker=sl.owner, defender=sl.get_target_creature(), skill=sl.sk, slot=sl, die=None, index=-1, clash_history=[], damage=0)
+                if sl.owner:
+                    sl.owner.fx_proc('on_attack_end', ctx)
+                    sl.owner.discard(sl.sk, ctx)
+                if csl and csl.owner:
+                    cc = Context(game=self, attacker=csl.owner, defender=csl.get_target_creature(), skill=csl.sk, slot=csl, die=None, index=-1, clash_history=[], damage=0)
+                    csl.owner.fx_proc('on_attack_end', cc)
+                    csl.owner.discard(csl.sk, cc)
 
-    def exit_combat(self) -> None:
-        if self.combat_room is not None:
-            self.floor.unlock_room(self.combat_room)
-            self.combat_room.cleared = True
-            self.combat_room = None
-        self.res_order.clear()
-        self.enemy_list = []
+    def exit_combat(self):
+        if self.c_room:
+            self.flr.unlock_room(self.c_room)
+            self.c_room.clr = True
+            self.c_room = None
+        self.res_ord.clear()
+        self.ene_lst = []
         self.set_state(GameState.EXPLORING)
 
-    def encounter_found(self, room: RoomRect | None) -> list[Creature] | None:
-        if room is None or room.cleared or not room.encounter_positions:
+    def enc_found(self, room):
+        if not room or room.clr or not room.enc_pos:
             return None
-        enemies = [self.spawn_enemy_at(pos) for pos in room.encounter_positions]
-        room.encounter_positions = []
-        return enemies
+        ene = [self.spawn_ene_at(pos) for pos in room.enc_pos]
+        room.enc_pos = []
+        return ene
 
-    def spawn_enemy_at(self, pos: tuple[int, int]) -> Creature:
-        enemy = self.engine.create_random_enemy(pos)
-        self.add_enemy(enemy)
-        return enemy
+    def spawn_ene_at(self, pos):
+        e = self.eng.create_rand_enemy(pos)
+        self.add_ene(e)
+        return e
     
-    def add_enemy(self, enemy: Creature) -> None:
-        enemy.layout = self
-        if enemy.max_points > 0:
-            enemy.points = enemy.max_points
+    def add_ene(self, e):
+        e.layout = self
+        if e.max_pts > 0:
+            e.pts = e.max_pts
         try:
-            enemy.effects.append(self.engine.load_effect('restore_points'))
+            e.fx.append(self.eng.load_fx('restore_points'))
         except ValueError:
             pass
-        if enemy.max_points > 0:
+        if e.max_pts > 0:
             try:
-                enemy.effects.append(self.engine.load_effect('card_draw'))
+                e.fx.append(self.eng.load_fx('card_draw'))
             except ValueError:
                 pass
-        self.apply_default_turn_end_effects(enemy)
-        self.enemy_list.append(enemy)
+        self._apply_def_turn_end_fx(e)
+        self.ene_lst.append(e)
 
-    def get_creature_at(self, x: int, y: int) -> Optional[Creature]:
-        if self.playerchar.is_alive() and self.playerchar.pos == (x, y):
-            return self.playerchar
-        return next((creature for creature in self.enemy_list
-                     if creature.is_alive() and creature.pos == (x, y)), None)
+    def get_c_at(self, x, y):
+        if self.pc.is_alive() and self.pc.pos == (x, y):
+            return self.pc
+        return next((c for c in self.ene_lst if c.is_alive() and c.pos == (x, y)), None)
 
-    def get_creatures_in_positions(self, positions: list[tuple[int, int]]) -> list[Creature]:
-        targets: list[Creature] = []
-        for pos in positions:
-            creature = self.get_creature_at(*pos)
-            if creature and creature not in targets:
-                targets.append(creature)
-        return targets
+    def get_c_in_pos(self, pos):
+        t = []
+        for p in pos:
+            c = self.get_c_at(*p)
+            if c and c not in t:
+                t.append(c)
+        return t
 
-    def get_skill_targets(self, slot: Skillslot) -> list[Creature]:
-        skill = slot.get_skill()
-        if skill is None:
+    def get_sk_tgts(self, sl):
+        sk = sl.get_skill()
+        if not sk:
             return []
-
-        if slot.get_target_positions():
-            return self.get_creatures_in_positions(slot.get_target_positions())
-
-        match skill.targeting_type:
+        if sl.get_target_positions():
+            return self.get_c_in_pos(sl.get_target_positions())
+        match sk.targeting_type:
             case 'self':
-                return [slot.owner] if slot.owner and slot.owner.is_alive() else []
+                return [sl.owner] if sl.owner and sl.owner.is_alive() else []
             case 'all_enemies':
-                return [enemy for enemy in self.enemy_list if enemy.is_alive()] if slot.owner == self.playerchar else ([self.playerchar] if self.playerchar.is_alive() else [])
+                return [e for e in self.ene_lst if e.is_alive()] if sl.owner == self.pc else ([self.pc] if self.pc.is_alive() else [])
             case 'all_allies':
-                return [self.playerchar] if slot.owner == self.playerchar else [enemy for enemy in self.enemy_list if enemy.is_alive()]
+                return [self.pc] if sl.owner == self.pc else [e for e in self.ene_lst if e.is_alive()]
             case 'enemy':
-                target = slot.get_target_creature()
-                return [target] if target and target.is_alive() else []
+                t = sl.get_target_creature()
+                return [t] if t and t.is_alive() else []
             case _:
-                target = slot.get_target_creature()
-                return [target] if target and target.is_alive() else []
+                t = sl.get_target_creature()
+                return [t] if t and t.is_alive() else []
 
-    def add_slot(self, slot: Skillslot):
-        self.res_order.append(slot)
+    def add_slot(self, sl):
+        self.res_ord.append(sl)
 
-    def get_allies(self, creature: Creature) -> list[Creature]:
-        if creature is self.playerchar:
-            return [self.playerchar]
-        return [ally for ally in self.enemy_list if ally.is_alive()]
+    def get_allies(self, c):
+        if c == self.pc:
+            return [self.pc]
+        return [a for a in self.ene_lst if a.is_alive()]
     
-    def mass_broadcast(self, trigger: str, phase: str, context: 'Context') -> None:
-        context.phase = phase
-
-        context.actor = self.playerchar
-        context.attacker = self.playerchar
-        self.playerchar.process_effects(trigger, context)
-
-        for enemy in self.enemy_list:
-            if not enemy.is_alive():
+    def mass_bc(self, t, ph, ctx):
+        ctx.phase = ph
+        ctx.actor = self.pc
+        ctx.atk = self.pc
+        self.pc.fx_proc(t, ctx)
+        for e in self.ene_lst:
+            if not e.is_alive():
                 continue
-            
-            context.actor = enemy
-            context.attacker = enemy
-            enemy.process_effects(trigger, context)
+            ctx.actor = e
+            ctx.atk = e
+            e.fx_proc(t, ctx)
 
-    def broadcast_ally_effects(self, creature: Creature, trigger: str, context: 'Context') -> None:
-        for ally in self.get_allies(creature):
-            if ally is not creature:
-                ally.process_effects(trigger, context)
+    def bc_ally_fx(self, c, t, ctx):
+        for a in self.get_allies(c):
+            if a != c:
+                a.fx_proc(t, ctx)
 
-    def handle_death(self, creature: Creature, context: 'Context' = None) -> None:
-        if creature is self.playerchar:
+    def handle_death(self, c, ctx=None):
+        if c == self.pc:
             self.end()
         else:
-            if context:
-                self.broadcast_ally_effects(creature, 'on_ally_death', context)
-            to_remove = [s for s in self.res_order 
-                        if s.owner == creature or s.target == creature]
-            for slot in to_remove:
-                self.res_order.remove(slot)
-            if creature in self.enemy_list:
-                self.enemy_list.remove(creature)
+            if ctx:
+                self.bc_ally_fx(c, 'on_ally_death', ctx)
+            tr = [s for s in self.res_ord if s.owner == c or s.tgt == c]
+            for s in tr:
+                self.res_ord.remove(s)
+            if c in self.ene_lst:
+                self.ene_lst.remove(c)
     
-    def handle_stagger(self, creature: Creature, context: 'Context' = None) -> None:
-        if context:
-            self.broadcast_ally_effects(creature, 'on_ally_stagger', context)
-            to_remove = [s for s in self.res_order 
-                        if s.owner == creature]
-            for slot in to_remove:
-                self.res_order.remove(slot)
-            self._remove_staggered_resolution_events(creature)
+    def handle_stag(self, c, ctx=None):
+        if ctx:
+            self.bc_ally_fx(c, 'on_ally_stagger', ctx)
+            tr = [s for s in self.res_ord if s.owner == c]
+            for s in tr:
+                self.res_ord.remove(s)
+            self._rem_stag_res_ev(c)
 
-    def _event_belongs_to_creature(self, event: dict, creature: Creature) -> bool:
-        if event.get('slot') and event['slot'].owner is creature:
+    def _ev_belong_to_c(self, ev, c):
+        if ev.get('slot') and ev['slot'].owner == c:
             return True
-        if event.get('counter_slot') and event['counter_slot'].owner is creature:
+        if ev.get('counter_slot') and ev['counter_slot'].owner == c:
             return True
-        context = event.get('context')
-        if context is None:
+        ctx = ev.get('context')
+        if not ctx:
             return False
-        return context.attacker is creature or context.defender is creature or context.target is creature
+        return ctx.atk == c or ctx.def_ == c or ctx.tgt == c
 
-    def _remove_staggered_resolution_events(self, creature: Creature) -> None:
-        self.resolution_queue = [event for event in self.resolution_queue
-                                 if not self._event_belongs_to_creature(event, creature)]
+    def _rem_stag_res_ev(self, c):
+        self.res_q = [ev for ev in self.res_q if not self._ev_belong_to_c(ev, c)]
 
-    def _recover_staggered_SR(self, creature: Creature) -> None:
-        if creature.is_staggered():
-            creature.staggered_turns += 1
-            if creature.staggered_turns > 1:
-                creature.SR = creature.max_SR
-                creature.staggered_turns = 0
+    def _recover_stag_sr(self, c):
+        if c.is_stag():
+            c.stag_turns += 1
+            if c.stag_turns > 1:
+                c.SR = c.max_SR
+                c.stag_turns = 0
 
     def end(self):
-        if self.combat_room is not None:
-            self.floor.unlock_room(self.combat_room)
-            self.combat_room = None
-        self.enemy_list.clear()
-        self.res_order.clear()
+        if self.c_room:
+            self.flr.unlock_room(self.c_room)
+            self.c_room = None
+        self.ene_lst.clear()
+        self.res_ord.clear()
         self.set_state(GameState.GAME_OVER)
+
+    def playerchar(self):
+        return self.pc
+    
+    @property
+    def playerchar(self):
+        return self.pc
+    
+    @property
+    def enemy_list(self):
+        return self.ene_lst
+    
+    @property
+    def current_resolution_event(self):
+        return self.cur_res_ev
+    
+    @property
+    def resolution_active(self):
+        return self.res_act
+    
+    @property
+    def statuses(self):
+        return self.stat
+    
+    @property
+    def res_order(self):
+        return self.res_ord
+    
+    @property
+    def damage_numbers(self):
+        return self.dmg_num
+    
+    @property
+    def status_numbers(self):
+        return self.stat_num

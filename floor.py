@@ -1,207 +1,191 @@
 import random
 from typing import Optional, Tuple
-from config import GRID_WIDTH, GRID_HEIGHT
+from config import GW, GH
 from tile import Tile, WallTile, CrumblingTile, HiddenTile, SlowTile
 
 class RoomRect:
-    def __init__(self, x: int, y: int, width: int, height: int):
+    def __init__(self, x, y, w, h):
         self.x = x
         self.y = y
-        self.width = width
-        self.height = height
-        self.encounter_positions: list[Tuple[int, int]] = []
-        self.cleared = False
-        self.door_positions: list[Tuple[int, int]] = []
-        self.door_tile_snapshot: dict[Tuple[int, int], Tile] = {}
+        self.w = w
+        self.h = h
+        self.enc_pos = []
+        self.clr = False
+        self.door_pos = []
+        self.door_snap = {}
 
     @property
-    def left(self) -> int:
+    def left(self):
         return self.x
 
     @property
-    def right(self) -> int:
-        return self.x + self.width - 1
+    def right(self):
+        return self.x + self.w - 1
 
     @property
-    def top(self) -> int:
+    def top(self):
         return self.y
 
     @property
-    def bottom(self) -> int:
-        return self.y + self.height - 1
+    def bottom(self):
+        return self.y + self.h - 1
 
     @property
-    def center(self) -> Tuple[int, int]:
-        return (self.x + self.width // 2, self.y + self.height // 2)
+    def center(self):
+        return (self.x + self.w // 2, self.y + self.h // 2)
 
-    def intersects(self, other: 'RoomRect') -> bool:
-        return not (
-            self.right < other.left - 1 or
-            self.left > other.right + 1 or
-            self.bottom < other.top - 1 or
-            self.top > other.bottom + 1
-        )
+    def intersects(self, o):
+        return not (self.right < o.left - 1 or self.left > o.right + 1 or
+                   self.bottom < o.top - 1 or self.top > o.bottom + 1)
 
-    def contains(self, x: int, y: int) -> bool:
+    def contains(self, x, y):
         return self.left <= x <= self.right and self.top <= y <= self.bottom
 
-
 class Floor:
-    def __init__(self, width: int = GRID_WIDTH, height: int = GRID_HEIGHT, seed: int | None = None):
-        self.width = width
-        self.height = height
-        self.seed = seed if seed is not None else random.randrange(2**31)
-        self.rooms: list[RoomRect] = []
-        self.start: Tuple[int, int] = (1, 1)
-        self.exit: Tuple[int, int] = (width - 2, height - 2)
-        self.tiles: list[list[Tile]] = []
-        self.generate()
-
-    def generate(self) -> None:
-        rnd = random.Random(self.seed)
-        self.tiles = [[WallTile(x, y) for x in range(self.width)] for y in range(self.height)]
+    def __init__(self, w=GW, h=GH, seed=None):
+        self.w = w
+        self.h = h
+        self.seed = seed if seed else random.randrange(2**31)
         self.rooms = []
+        self.start = (1, 1)
+        self.exit = (w - 2, h - 2)
+        self.tiles = []
+        self.gen()
 
-        room_count = rnd.randint(3, 8)
-        attempts = 0
-        while len(self.rooms) < room_count and attempts < 60:
-            room_width = rnd.randint(5, min(10, self.width - 3))
-            room_height = rnd.randint(5, min(8, self.height - 3))
-            max_x = max(1, self.width - room_width - 2)
-            max_y = max(1, self.height - room_height - 2)
-            room_x = rnd.randint(1, max_x)
-            room_y = rnd.randint(1, max_y)
-            room = RoomRect(room_x, room_y, room_width, room_height)
-
-            if any(room.intersects(existing) for existing in self.rooms):
-                attempts += 1
+    def gen(self):
+        rnd = random.Random(self.seed)
+        self.tiles = [[WallTile(x, y) for x in range(self.w)] for y in range(self.h)]
+        self.rooms = []
+        cnt = rnd.randint(3, 8)
+        att = 0
+        while len(self.rooms) < cnt and att < 60:
+            rw = rnd.randint(5, min(10, self.w - 3))
+            rh = rnd.randint(5, min(8, self.h - 3))
+            max_x = max(1, self.w - rw - 2)
+            max_y = max(1, self.h - rh - 2)
+            rx = rnd.randint(1, max_x)
+            ry = rnd.randint(1, max_y)
+            room = RoomRect(rx, ry, rw, rh)
+            if any(room.intersects(ex) for ex in self.rooms):
+                att += 1
                 continue
-
             self.carve_room(room)
             self.rooms.append(room)
-            attempts += 1
+            att += 1
 
         while len(self.rooms) < 3:
-            fallback_width = min(8, self.width - 2)
-            fallback_height = min(6, self.height - 2)
-            placed = False
+            fw = min(8, self.w - 2)
+            fh = min(6, self.h - 2)
+            pl = False
             for _ in range(10):
-                fallback_x = rnd.randint(1, self.width - fallback_width - 1)
-                fallback_y = rnd.randint(1, self.height - fallback_height - 1)
-                room = RoomRect(fallback_x, fallback_y, fallback_width, fallback_height)
-                if not any(room.intersects(existing) for existing in self.rooms):
+                fx = rnd.randint(1, self.w - fw - 1)
+                fy = rnd.randint(1, self.h - fh - 1)
+                room = RoomRect(fx, fy, fw, fh)
+                if not any(room.intersects(ex) for ex in self.rooms):
                     self.carve_room(room)
                     self.rooms.append(room)
-                    placed = True
+                    pl = True
                     break
-
-            if not placed:
-                room = RoomRect(1, 1, fallback_width, fallback_height)
+            if not pl:
+                room = RoomRect(1, 1, fw, fh)
                 self.carve_room(room)
                 self.rooms.append(room)
 
-        for index in range(1, len(self.rooms)):
-            previous = self.rooms[index - 1].center
-            current = self.rooms[index].center
-            self.carve_corridor(previous, current, rnd)
+        for i in range(1, len(self.rooms)):
+            prev = self.rooms[i - 1].center
+            cur = self.rooms[i].center
+            self.carve_corr(prev, cur, rnd)
 
         self.start = self.rooms[0].center
         self.exit = self.rooms[-1].center
-        self.calculate_room_doors()
-        self.populate_room_encounters(rnd)
+        self.calc_doors()
+        self.pop_enc(rnd)
 
-    def carve_room(self, room: RoomRect) -> None:
+    def carve_room(self, room):
         for y in range(room.top, room.bottom + 1):
             for x in range(room.left, room.right + 1):
                 self.tiles[y][x] = Tile(x, y, (100, 100, 100), True)
 
-    def carve_corridor(self, start: Tuple[int, int], end: Tuple[int, int], rnd: random.Random) -> None:
-        x1, y1 = start
-        x2, y2 = end
+    def carve_corr(self, s, e, rnd):
+        x1, y1 = s
+        x2, y2 = e
         if rnd.choice([True, False]):
-            self.carve_horizontal_tunnel(x1, x2, y1)
-            self.carve_vertical_tunnel(y1, y2, x2)
+            self.carve_h_tun(x1, x2, y1)
+            self.carve_v_tun(y1, y2, x2)
         else:
-            self.carve_vertical_tunnel(y1, y2, x1)
-            self.carve_horizontal_tunnel(x1, x2, y2)
+            self.carve_v_tun(y1, y2, x1)
+            self.carve_h_tun(x1, x2, y2)
 
-    def carve_horizontal_tunnel(self, x1: int, x2: int, y: int) -> None:
+    def carve_h_tun(self, x1, x2, y):
         for x in range(min(x1, x2), max(x1, x2) + 1):
             self.tiles[y][x] = Tile(x, y, (100, 100, 100), True)
 
-    def carve_vertical_tunnel(self, y1: int, y2: int, x: int) -> None:
+    def carve_v_tun(self, y1, y2, x):
         for y in range(min(y1, y2), max(y1, y2) + 1):
             self.tiles[y][x] = Tile(x, y, (100, 100, 100), True)
 
-    def calculate_room_doors(self) -> None:
+    def calc_doors(self):
         for room in self.rooms:
-            room.door_positions = []
+            room.door_pos = []
             for x in range(room.left, room.right + 1):
-                self._record_door_position(room, x, room.top)
-                self._record_door_position(room, x, room.bottom)
+                self.rec_door(room, x, room.top)
+                self.rec_door(room, x, room.bottom)
             for y in range(room.top, room.bottom + 1):
-                self._record_door_position(room, room.left, y)
-                self._record_door_position(room, room.right, y)
+                self.rec_door(room, room.left, y)
+                self.rec_door(room, room.right, y)
 
-    def _record_door_position(self, room: RoomRect, x: int, y: int) -> None:
-        if not self.is_within_bounds(x, y):
+    def rec_door(self, room, x, y):
+        if not self.in_bounds(x, y):
             return
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             nx, ny = x + dx, y + dy
-            if self.is_within_bounds(nx, ny) and not room.contains(nx, ny) and self.tiles[ny][nx].walkable:
-                if (nx, ny) not in room.door_positions:
-                    room.door_positions.append((nx, ny))
+            if self.in_bounds(nx, ny) and not room.contains(nx, ny) and self.tiles[ny][nx].walkable:
+                if (nx, ny) not in room.door_pos:
+                    room.door_pos.append((nx, ny))
 
-    def populate_room_encounters(self, rnd: random.Random) -> None:
-        for index, room in enumerate(self.rooms):
-            room.cleared = index == 0
-            room.door_tile_snapshot = {}
-            if room.cleared:
-                room.encounter_positions = []
+    def pop_enc(self, rnd):
+        for i, room in enumerate(self.rooms):
+            room.clr = i == 0
+            room.door_snap = {}
+            if room.clr:
+                room.enc_pos = []
                 continue
-            positions = [
-                (x, y)
-                for x in range(room.left + 1, room.right)
-                for y in range(room.top + 1, room.bottom)
-                if self.tiles[y][x].walkable
-            ]
-            rnd.shuffle(positions)
-            count = rnd.randint(1, min(3, max(1, len(positions))))
-            room.encounter_positions = positions[:count]
+            pos = [(x, y) for x in range(room.left + 1, room.right)
+                   for y in range(room.top + 1, room.bottom)
+                   if self.tiles[y][x].walkable]
+            rnd.shuffle(pos)
+            cnt = rnd.randint(1, min(3, max(1, len(pos))))
+            room.enc_pos = pos[:cnt]
 
-    def lock_room(self, room: RoomRect) -> None:
-        for x, y in room.door_positions:
-            if (x, y) not in room.door_tile_snapshot:
-                room.door_tile_snapshot[(x, y)] = self.tiles[y][x]
+    def lock_room(self, room):
+        for x, y in room.door_pos:
+            if (x, y) not in room.door_snap:
+                room.door_snap[(x, y)] = self.tiles[y][x]
                 self.tiles[y][x] = WallTile(x, y)
 
-    def unlock_room(self, room: RoomRect) -> None:
-        for (x, y), tile in list(room.door_tile_snapshot.items()):
+    def unlock_room(self, room):
+        for (x, y), tile in list(room.door_snap.items()):
             self.tiles[y][x] = tile
-        room.door_tile_snapshot.clear()
+        room.door_snap.clear()
 
-    def is_within_bounds(self, x: int, y: int) -> bool:
-        return 0 <= x < self.width and 0 <= y < self.height
+    def in_bounds(self, x, y):
+        return 0 <= x < self.w and 0 <= y < self.h
 
-    def is_walkable(self, x: int, y: int) -> bool:
-        return self.is_within_bounds(x, y) and self.tiles[y][x].walkable
+    def is_walk(self, x, y):
+        return self.in_bounds(x, y) and self.tiles[y][x].walkable
 
-    def get_tile(self, x: int, y: int) -> Optional[Tile]:
-        if self.is_within_bounds(x, y):
+    def get_tile(self, x, y):
+        if self.in_bounds(x, y):
             return self.tiles[y][x]
         return None
 
-    def get_floor_positions(self) -> list[Tuple[int, int]]:
-        return [
-            (x, y)
-            for y in range(self.height)
-            for x in range(self.width)
-            if self.tiles[y][x].walkable
-        ]
+    def get_floor_pos(self):
+        return [(x, y) for y in range(self.h)
+                for x in range(self.w) if self.tiles[y][x].walkable]
 
-    def get_neighbor_positions(self, x: int, y: int) -> list[Tuple[int, int]]:
-        candidates = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
-        return [pos for pos in candidates if self.is_walkable(*pos)]
+    def get_neigh(self, x, y):
+        cand = [(x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)]
+        return [pos for pos in cand if self.is_walk(*pos)]
 
-    def get_room_at(self, x: int, y: int) -> Optional[RoomRect]:
+    def get_room_at(self, x, y):
         return next((room for room in self.rooms if room.contains(x, y)), None)
