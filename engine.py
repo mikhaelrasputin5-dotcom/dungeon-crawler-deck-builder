@@ -1,8 +1,7 @@
-﻿import json
+import json
 import random
 from os import getcwd
 from typing import Optional
-
 from creature import Creature
 from die import Die
 from effect import Effect
@@ -10,170 +9,128 @@ from skill import Skill
 from status import Status
 
 class Engine:
-    def __init__(self, skills: str = 'test.json',
-                 effects: str = 'test.json',
-                 statuses: str = 'test.json'):
-        self.skills = getcwd() + '\\' + skills
-        self.effects = getcwd() + '\\' + effects
-        self.statuses = getcwd() + '\\' + statuses
+    def __init__(self, sk_f='test.json', fx_f='test.json', st_f='test.json'):
+        self.sk_f = getcwd() + '\\' + sk_f
+        self.fx_f = getcwd() + '\\' + fx_f
+        self.st_f = getcwd() + '\\' + st_f
+        self._d = None
+        self._sk_c = {}
+        self._fx_c = {}
+        self._st_c = {}
 
-        self._data: Optional[dict] = None
-        self._skill_cache: dict[str, Skill] = {}
-        self._effect_cache: dict[str, Effect] = {}
-        self._status_cache: dict[str, Status] = {}
-
-    def _load_data(self) -> dict:
-        if self._data is None:
+    def _load(self):
+        if self._d is None:
             try:
-                with open(self.skills, 'r', encoding='utf-8') as file:
-                    self._data = json.load(file)
+                with open(self.sk_f, 'r', encoding='utf-8') as f:
+                    self._d = json.load(f)
             except FileNotFoundError:
-                raise FileNotFoundError(f"Data file not found: {self.skills}")
-        return self._data
+                raise FileNotFoundError(f"Data file not found: {self.sk_f}")
+        return self._d
 
-    def load_skill(self, id: str) -> Skill:
-        if id in self._skill_cache:
-            return self._skill_cache[id]
-
-        data = self._load_data()
-        info = next((obj for obj in data.get('skills', []) if obj['id'] == id), None)
-        if info is None:
-            raise ValueError(f"Skill '{id}' not found in {self.skills}")
-
-        skill = Skill(
-            name=info['name'],
-            description=info.get('description', ''),
-            cost=info.get('cost', 0),
-            targeting_type=info.get('targeting_type', 'enemy'),
-            dice=[Die(
-                roll_range=die['range'],
-                type=die['type'],
-                effects=[Effect(
-                    effect['trigger'],
-                    effect['action'],
-                    effect.get('condition'))
-                    for effect in die.get('effects', [])]
-            ) for die in info.get('dice', [])]
+    def load_sk(self, id):
+        if id in self._sk_c:
+            return self._sk_c[id]
+        d = self._load()
+        inf = next((obj for obj in d.get('skills', []) if obj['id'] == id), None)
+        if inf is None:
+            raise ValueError(f"Skill '{id}' not found in {self.sk_f}")
+        sk = Skill(
+            inf['name'], inf.get('description', ''), inf.get('cost', 0),
+            inf.get('targeting_type', 'enemy'),
+            [Die(die['range'], die['type'],
+                 [Effect(e['trigger'], e['action'], e.get('condition'))
+                  for e in die.get('effects', [])])
+             for die in inf.get('dice', [])]
         )
+        for ed in inf.get('effects', []):
+            sk.effects.append(Effect(ed['trigger'], ed['action'], ed.get('condition')))
+        self._sk_c[id] = sk
+        return sk
 
-        for effect_data in info.get('effects', []):
-            skill.effects.append(Effect(
-                effect_data['trigger'],
-                effect_data['action'],
-                effect_data.get('condition')
-            ))
+    def load_fx(self, id):
+        if id in self._fx_c:
+            return self._fx_c[id]
+        d = self._load()
+        inf = next((obj for obj in d.get('effects', []) if obj['id'] == id), None)
+        if inf is None:
+            raise ValueError(f"Effect '{id}' not found in {self.fx_f}")
+        act = inf.get('action')
+        if act is None and inf.get('actions'):
+            act = inf['actions'][0]
+        fx = Effect(inf['trigger'], act, inf.get('condition'))
+        self._fx_c[id] = fx
+        return fx
 
-        self._skill_cache[id] = skill
-        return skill
-
-    def load_effect(self, id: str) -> Effect:
-        if id in self._effect_cache:
-            return self._effect_cache[id]
-
-        data = self._load_data()
-        info = next((obj for obj in data.get('effects', []) if obj['id'] == id), None)
-        if info is None:
-            raise ValueError(f"Effect '{id}' not found in {self.effects}")
-
-        action = info.get('action')
-        if action is None and info.get('actions'):
-            action = info['actions'][0]
-
-        effect = Effect(
-            info['trigger'],
-            action,
-            info.get('condition')
+    def load_st(self, id):
+        if id in self._st_c:
+            return self._st_c[id]
+        d = self._load()
+        inf = next((obj for obj in d.get('statuses', []) if obj['id'] == id), None)
+        if inf is None:
+            raise ValueError(f"Status '{id}' not found in {self.st_f}")
+        st = Status(
+            inf['id'], inf['name'], inf.get('description', ''),
+            decays=inf.get('decays', True),
+            effects=[self.load_fx(e['id']) for e in inf.get('effects', [])]
         )
+        self._st_c[id] = st
+        return st
 
-        self._effect_cache[id] = effect
-        return effect
+    def load_all_sk(self):
+        if self._sk_c:
+            return dict(self._sk_c)
+        d = self._load()
+        for inf in d.get('skills', []):
+            self.load_sk(inf['id'])
+        return dict(self._sk_c)
 
-    def load_status(self, id: str) -> Status:
-        if id in self._status_cache:
-            return self._status_cache[id]
+    def load_all_fx(self):
+        if self._fx_c:
+            return dict(self._fx_c)
+        d = self._load()
+        for inf in d.get('effects', []):
+            self.load_fx(inf['id'])
+        return dict(self._fx_c)
 
-        data = self._load_data()
-        info = next((obj for obj in data.get('statuses', []) if obj['id'] == id), None)
-        if info is None:
-            raise ValueError(f"Status '{id}' not found in {self.statuses}")
+    def load_all_st(self):
+        res = {}
+        d = self._load()
+        for sd in d.get('statuses', []):
+            st = self.load_st(sd['id'])
+            res[sd['id']] = st
+            if st.name not in res:
+                res[st.name] = st
+        return res
 
-        status = Status(
-            info['id'],
-            info['name'],
-            info.get('description', ''),
-            decays=info.get('decays', True),
-            effects=[self.load_effect(effect['id'])
-                     for effect in info.get('effects', [])]
-        )
-
-        self._status_cache[id] = status
-        return status
-
-    def load_all_skills(self) -> dict[str, Skill]:
-        if self._skill_cache:
-            return dict(self._skill_cache)
-
-        data = self._load_data()
-        for info in data.get('skills', []):
-            self.load_skill(info['id'])
-        return dict(self._skill_cache)
-
-    def load_all_effects(self) -> dict[str, Effect]:
-        if self._effect_cache:
-            return dict(self._effect_cache)
-
-        data = self._load_data()
-        for info in data.get('effects', []):
-            self.load_effect(info['id'])
-        return dict(self._effect_cache)
-
-    def load_all_statuses(self) -> dict[str, Status]:
-        results = {}
-        data = self._load_data()
-        for status_data in data.get('statuses', []):
-            status = self.load_status(status_data['id'])
-            results[status_data['id']] = status
-            if status.name not in results:
-                results[status.name] = status
-        return results
-
-    def load_enemy(self, id: str, pos: tuple[int, int] = (0, 0)) -> Creature:
-        data = self._load_data()
-        info = next((obj for obj in data.get('enemies', []) if obj['id'] == id), None)
-        if info is None:
-            raise ValueError(f"Enemy '{id}' not found in {self.skills}")
-
-        deck = [self.load_skill(skill_id) for skill_id in info.get('deck', [])]
+    def load_enemy(self, id, pos=(0, 0)):
+        d = self._load()
+        inf = next((obj for obj in d.get('enemies', []) if obj['id'] == id), None)
+        if inf is None:
+            raise ValueError(f"Enemy '{id}' not found in {self.sk_f}")
+        deck = [self.load_sk(sid) for sid in inf.get('deck', [])]
         random.shuffle(deck)
-        enemy = Creature(
-            name=info['name'],
-            description=info.get('description', ''),
-            HP=info.get('HP', 10),
-            SR=info.get('SR', 10),
-            resist=info.get('resist', {}),
-            slots=[],
-            deck=deck,
-            max_points=info.get('max_points', -1),
-            pos=pos
+        enem = Creature(
+            inf['name'], inf.get('description', ''), inf.get('HP', 10),
+            inf.get('SR', 10), inf.get('resist', {}), [], deck,
+            max_pts=inf.get('max_points', -1), pos=pos
         )
-        enemy.points = enemy.max_points if enemy.max_points > 0 else 0
-        if enemy.deck:
-            enemy.draw_skills(min(3, len(enemy.deck)))
-        return enemy
+        enem.pts = enem.max_pts if enem.max_pts > 0 else 0
+        if enem.deck:
+            enem.draw_sk(min(3, len(enem.deck)))
+        return enem
 
-    def create_random_enemy(self, pos: tuple[int, int] = (0, 0)) -> Creature:
-        data = self._load_data()
-        enemies = data.get('enemies', [])
+    def create_rand_enemy(self, pos=(0, 0)):
+        d = self._load()
+        enemies = d.get('enemies', [])
         if not enemies:
             raise ValueError('No enemy definitions available')
+        inf = random.choice(enemies)
+        return self.load_enemy(inf['id'], pos)
 
-        info = random.choice(enemies)
-        return self.load_enemy(info['id'], pos)
-
-    def get_random_skill_ids(self, count: int = 6) -> list[str]:
-        data = self._load_data()
-        ids = [obj['id'] for obj in data.get('skills', [])]
+    def get_rand_sk_ids(self, cnt=6):
+        d = self._load()
+        ids = [obj['id'] for obj in d.get('skills', [])]
         if not ids:
             return []
-        count = min(count, len(ids))
-        return random.sample(ids, count)
+        cnt = min(cnt, len(ids))
+        return random.sample(ids, cnt)

@@ -6,23 +6,23 @@ if TYPE_CHECKING:
     from creature import Creature
 
 class Effect(Interactible):
-    def __init__(self, trigger: str, action: dict, condition: dict = None):
-        self.trigger = trigger
-        self.action = action
-        self.condition = condition
-        
+    def __init__(self, t, act, cond=None):
+        self.trigger = t
+        self.action = act
+        self.condition = cond
+    
     def get_trigger(self):
         return self.trigger
-
+    
     def get_action(self):
         return self.action
     
-    def get_condition(self):
+    def get_cond(self):
         return self.condition
     
-    def _get_target_label(self) -> str:
-        target = self.action.get('target')
-        match target:
+    def _get_tgt_lbl(self):
+        tgt = self.action.get('target')
+        match tgt:
             case 'self':
                 return 'self'
             case 'defender' | 'target':
@@ -38,228 +38,199 @@ class Effect(Interactible):
             case None:
                 return 'target'
             case _:
-                return str(target)
+                return str(tgt)
 
-    def _resolve_targets(self, context: 'Context') -> list['Creature']:
-        target = self.action.get('target')
-
-        def alive(creature):
-            return creature is not None and creature.is_alive()
-
-        if target in (None, 'target', 'defender'):
-            if context.targets:
-                return [t for t in context.targets if alive(t)]
-            if context.defender and alive(context.defender):
-                return [context.defender]
-            if context.target and alive(context.target):
-                return [context.target]
+    def _resolve_tgts(self, ctx):
+        tgt = self.action.get('target')
+        def alive(c):
+            return c and c.is_alive()
+        if tgt in (None, 'target', 'defender'):
+            if ctx.tgts:
+                return [t for t in ctx.tgts if alive(t)]
+            if ctx.def_ and alive(ctx.def_):
+                return [ctx.def_]
+            if ctx.tgt and alive(ctx.tgt):
+                return [ctx.tgt]
             return []
-
-        if target == 'self':
-            return [context.attacker] if alive(context.attacker) else []
-
-        if target in ('enemy', 'opponent'):
-            if context.attacker and context.game:
-                opponent = context.get_opponent(context.attacker)
-                return [opponent] if alive(opponent) else []
-            if context.defender and alive(context.defender):
-                return [context.defender]
+        if tgt == 'self':
+            return [ctx.atk] if alive(ctx.atk) else []
+        if tgt in ('enemy', 'opponent'):
+            if ctx.atk and ctx.game:
+                opp = ctx.get_opponent(ctx.atk)
+                return [opp] if alive(opp) else []
+            if ctx.def_ and alive(ctx.def_):
+                return [ctx.def_]
             return []
-
-        if target in ('ally', 'all_allies'):
-            if context.attacker and context.game:
-                return [ally for ally in context.game.get_allies(context.attacker) if alive(ally)]
-            return [context.attacker] if alive(context.attacker) else []
-
-        if target == 'all_enemies':
-            if context.attacker and context.game:
-                if context.attacker == context.game.playerchar:
-                    return [enemy for enemy in context.game.enemy_list if alive(enemy)]
-                return [context.game.playerchar] if alive(context.game.playerchar) else []
+        if tgt in ('ally', 'all_allies'):
+            if ctx.atk and ctx.game:
+                return [a for a in ctx.game.get_allies(ctx.atk) if alive(a)]
+            return [ctx.atk] if alive(ctx.atk) else []
+        if tgt == 'all_enemies':
+            if ctx.atk and ctx.game:
+                if ctx.atk == ctx.game.playerchar:
+                    return [e for e in ctx.game.enemy_list if alive(e)]
+                return [ctx.game.playerchar] if alive(ctx.game.playerchar) else []
             return []
-
-        if target == 'all_targets':
-            return [t for t in (context.targets or []) if alive(t)]
-
+        if tgt == 'all_targets':
+            return [t for t in (ctx.tgts or []) if alive(t)]
         return []
 
-    def _describe_action(self) -> str:
-        action_type = self.action.get('type')
-        target_label = self._get_target_label()
-
-        match action_type:
+    def _desc_action(self):
+        at = self.action.get('type')
+        tl = self._get_tgt_lbl()
+        match at:
             case 'modify_max_roll':
                 return f"Increase max roll by {self.action.get('value', 0)}"
             case 'modify_min_roll':
                 return f"Increase min roll by {self.action.get('value', 0)}"
             case 'inflict_status':
-                potency = self.action.get('potency', 0)
-                status = self.action.get('status', 'status')
-                count = self.action.get('count', 0)
-                parts = []
-                if potency:
-                    parts.append(str(potency))
-                parts.append(status.capitalize())
-                desc = 'Inflict ' + ' '.join(parts)
-                if count:
-                    desc += f' ({count} stacks)'
-                if target_label != 'target':
-                    desc += f' on {target_label}'
-                return desc
+                p = self.action.get('potency', 0)
+                s = self.action.get('status', 'status')
+                c = self.action.get('count', 0)
+                pts = []
+                if p:
+                    pts.append(str(p))
+                pts.append(s.capitalize())
+                d = 'Inflict ' + ' '.join(pts)
+                if c:
+                    d += f' ({c} stacks)'
+                if tl != 'target':
+                    d += f' on {tl}'
+                return d
             case 'grant_next_turn_status':
-                status = self.action.get('status', 'status')
-                count = self.action.get('count', 0)
-                potency = self.action.get('potency', 0)
-                desc = f'Grant {status.capitalize()} next turn'
-                if potency:
-                    desc += f' ({potency})'
-                if count:
-                    desc += f' x{count}'
-                if target_label != 'target':
-                    desc += f' to {target_label}'
-                return desc
+                s = self.action.get('status', 'status')
+                c = self.action.get('count', 0)
+                p = self.action.get('potency', 0)
+                d = f'Grant {s.capitalize()} next turn'
+                if p:
+                    d += f' ({p})'
+                if c:
+                    d += f' x{c}'
+                if tl != 'target':
+                    d += f' to {tl}'
+                return d
             case 'double_damage':
-                multiplier = self.action.get('multiplier', 2)
-                return f'Double damage x{multiplier}'
+                m = self.action.get('multiplier', 2)
+                return f'Double damage x{m}'
             case 'heal':
-                amount = self.action.get('amount', 0)
-                return f'Heal {amount} to {target_label}'
+                a = self.action.get('amount', 0)
+                return f'Heal {a} to {tl}'
             case 'damage_by_potency':
-                status = self.action.get('status', 'status')
-                multiplier = self.action.get('multiplier', 1)
-                return f'Damage by {multiplier}x {status.capitalize()} potency to {target_label}'
+                s = self.action.get('status', 'status')
+                m = self.action.get('multiplier', 1)
+                return f'Damage by {m}x {s.capitalize()} potency to {tl}'
             case 'restore_points':
-                points = self.action.get('points', 1)
-                return f'Restore {points} points to {target_label}'
+                p = self.action.get('points', 1)
+                return f'Restore {p} points to {tl}'
             case 'restore_points_to_max':
-                return f'Restore points to max for {target_label}'
+                return f'Restore points to max for {tl}'
             case 'draw_skills':
-                count = self.action.get('count', 1)
-                plural = 's' if count != 1 else ''
-                return f'Draw {count} card{plural}'
+                c = self.action.get('count', 1)
+                pl = 's' if c != 1 else ''
+                return f'Draw {c} card{pl}'
             case 'draw_if_empty_hand':
-                count = self.action.get('count', 1)
-                return f'Draw {count} if hand empty'
+                c = self.action.get('count', 1)
+                return f'Draw {c} if hand empty'
             case 'refresh_if_deck_empty':
                 return 'Refresh deck if empty'
             case 'refresh':
                 return 'Refresh deck'
             case 'gain_shield':
-                amount = self.action.get('amount', 0)
-                return f'Gain {amount} shield'
+                a = self.action.get('amount', 0)
+                return f'Gain {a} shield'
             case _:
-                return f'{action_type.replace('_', ' ').capitalize()}'
+                return f'{at.replace("_", " ").capitalize()}'
 
-    def describe(self) -> str:
-        trigger = self.trigger.replace('_', ' ').capitalize()
-        action_desc = self._describe_action()
-        return f'[{trigger}] {action_desc}'
+    def describe(self):
+        tg = self.trigger.replace('_', ' ').capitalize()
+        ad = self._desc_action()
+        return f'[{tg}] {ad}'
 
-    def check_condition(self, context: 'Context') -> bool:
+    def check_cond(self, ctx):
         if not self.condition:
             return True
-        
         match self.condition.get('type'):
-        
             case 'status_count':
-                target = context.defender if self.condition.get('subject') == 'target' else context.attacker
-                status = self.condition['status']
-                value = self.condition['value']
-                return target.get_status_count(status) >= value
-
+                tgt = ctx.def_ if self.condition.get('subject') == 'target' else ctx.atk
+                s = self.condition['status']
+                v = self.condition['value']
+                return tgt.get_stat_cnt(s) >= v
             case 'consecutive_wins':
                 n = self.condition['count']
-                history = context.clash_history
-                if len(history) < n:
+                h = ctx.ch
+                if len(h) < n:
                     return False
-                return all(my > their for my, their in history[-n:])
-
+                return all(my > their for my, their in h[-n:])
             case 'opponent_skill_type':
-                if not hasattr(context, 'opponent_skill') or not context.opponent_skill:
+                if not hasattr(ctx, 'opp_sk') or not ctx.opp_sk:
                     return False
-                return context.opponent_skill.targeting_type == self.condition.get('skill_type')
-        
+                return ctx.opp_sk.targeting_type == self.condition.get('skill_type')
         return False
 
-    def execute(self, context: 'Context') -> None:
-        if not self.check_condition(context):
+    def execute(self, ctx):
+        if not self.check_cond(ctx):
             return
-        
         match self.action.get('type'):
-        
             case 'modify_max_roll':
-                if context.die:
-                    context.die.max_roll += self.action.get('value', 1)
-
+                if ctx.die:
+                    ctx.die.max_roll += self.action.get('value', 1)
             case 'modify_min_roll':
-                if context.die:
-                    context.die.min_roll += self.action.get('value', 1)
-
+                if ctx.die:
+                    ctx.die.min_roll += self.action.get('value', 1)
             case 'inflict_status':
-                potency = self.action.get('potency', 1)
-                count = self.action.get('count', 1)
-                status_name = self.action['status']
-                status = None
-                if hasattr(context, 'game') and context.game:
-                    status = context.game.statuses.get(status_name)
-                for target in self._resolve_targets(context):
-                    target.add_status(status or status_name, potency, count)
-
+                p = self.action.get('potency', 1)
+                c = self.action.get('count', 1)
+                sn = self.action['status']
+                s = None
+                if hasattr(ctx, 'game') and ctx.game:
+                    s = ctx.game.statuses.get(sn)
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.add_stat(s or sn, p, c)
             case 'grant_next_turn_status':
-                potency = self.action.get('potency', 1)
-                count = self.action.get('count', 1)
-                for target in self._resolve_targets(context):
-                    target.schedule_status(self.action['status'], potency, count, delay=1)
-
+                p = self.action.get('potency', 1)
+                c = self.action.get('count', 1)
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.sched_stat(self.action['status'], p, c, del_=1)
             case 'double_damage':
-                context.damage *= self.action.get('multiplier', 2)
-
+                ctx.dmg *= self.action.get('multiplier', 2)
             case 'heal':
-                amount = self.action.get('amount', 10)
-                for target in self._resolve_targets(context):
-                    target.HP = min(target.HP + amount, target.max_HP)
-            
+                a = self.action.get('amount', 10)
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.HP = min(tgt.HP + a, tgt.max_HP)
             case 'damage_by_potency':
-                for target in self._resolve_targets(context):
-                    status = target.get_status(self.action['status'])
-                    if not status:
+                for tgt in self._resolve_tgts(ctx):
+                    s = tgt.get_stat(self.action['status'])
+                    if not s:
                         continue
-                    damage = self.action.get('multiplier', 1) * status.potency
-                    target.take_damage(damage, self.action.get('damage_type', 'true'), context)
-                    if status.decay():
-                        target.statuses.pop(self.action['status'], None)
-
+                    d = self.action.get('multiplier', 1) * s.potency
+                    tgt.take_dmg(d, self.action.get('damage_type', 'true'), ctx)
+                    if s.decay():
+                        tgt.stat.pop(self.action['status'], None)
             case 'restore_points':
-                points = self.action.get('points', 1)
-                for target in self._resolve_targets(context):
-                    target.points = min(target.points + points, target.max_points)
-
+                p = self.action.get('points', 1)
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.pts = min(tgt.pts + p, tgt.max_pts)
             case 'restore_points_to_max':
-                for target in self._resolve_targets(context):
-                    target.points = target.max_points
-
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.pts = tgt.max_pts
             case 'draw_skills':
-                count = self.action.get('count', 1)
-                for target in self._resolve_targets(context):
-                    target.draw_skills(count)
-
+                c = self.action.get('count', 1)
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.draw_sk(c)
             case 'draw_if_empty_hand':
-                count = self.action.get('count', 1)
-                for target in self._resolve_targets(context):
-                    if not target.hand:
-                        target.draw_skills(count)
-
+                c = self.action.get('count', 1)
+                for tgt in self._resolve_tgts(ctx):
+                    if not tgt.hand:
+                        tgt.draw_sk(c)
             case 'refresh_if_deck_empty':
-                for target in self._resolve_targets(context):
-                    if not target.deck and target.discarded:
-                        target.refresh_deck()
-
+                for tgt in self._resolve_tgts(ctx):
+                    if not tgt.deck and tgt.disc:
+                        tgt.refresh()
             case 'refresh':
-                for target in self._resolve_targets(context):
-                    target.refresh_deck()
-
+                for tgt in self._resolve_tgts(ctx):
+                    tgt.refresh()
             case 'gain_shield':
-                amount = self.action.get('amount', 0)
-                for target in self._resolve_targets(context):
-                    if hasattr(target, 'shield'):
-                        target.shield += amount
+                a = self.action.get('amount', 0)
+                for tgt in self._resolve_tgts(ctx):
+                    if hasattr(tgt, 'shield'):
+                        tgt.shield += a
